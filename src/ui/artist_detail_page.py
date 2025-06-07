@@ -21,6 +21,7 @@ from utils.image_cache import get_image_from_cache, save_image_to_cache
 
 from src.ui.search_widget import SearchResultCard # Added import
 from src.ui.track_list_header_widget import TrackListHeaderWidget # ADDED
+from ui.components.responsive_grid import ResponsiveGridWidget
 from src.ui.flowlayout import FlowLayout # Use our custom FlowLayout
 
 logger = logging.getLogger(__name__)
@@ -221,15 +222,9 @@ class ArtistDetailPage(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         
-        # Add a header/title
-        header = QWidget()
-        header.setObjectName("top_tracks_header")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 16, 16, 8)
-        
-        title = QLabel("Top Tracks")
-        title.setObjectName("top_tracks_title")
-        header_layout.addWidget(title)
+        # Add track list header (like other detail pages)
+        self.top_tracks_header = TrackListHeaderWidget(self)
+        layout.addWidget(self.top_tracks_header)
         
         # Add a scroll area for the list of tracks
         scroll = QScrollArea()
@@ -242,8 +237,8 @@ class ArtistDetailPage(QWidget):
         
         # Create the layout that will hold the track cards
         self.top_tracks_list_layout = QVBoxLayout(content)
-        self.top_tracks_list_layout.setContentsMargins(16, 8, 16, 16)
-        self.top_tracks_list_layout.setSpacing(4)
+        self.top_tracks_list_layout.setContentsMargins(0, 5, 0, 5)
+        self.top_tracks_list_layout.setSpacing(5)
         self.top_tracks_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         # Add a placeholder/loading message
@@ -254,8 +249,7 @@ class ArtistDetailPage(QWidget):
         # Set the content widget as the scroll area's widget
         scroll.setWidget(content)
         
-        # Add the header and scroll area to the page layout
-        layout.addWidget(header)
+        # Add scroll area to the page layout
         layout.addWidget(scroll)
         
         return page
@@ -802,15 +796,11 @@ class ArtistDetailPage(QWidget):
             
             logger.info(f"[ArtistDetail.load_albums] Found {len(albums_data)} albums for artist {self.current_artist_id}")
             
-            # Use the same approach as Featured In: create a new widget with QGridLayout
-            grid_widget = QWidget()
-            grid_layout = QGridLayout(grid_widget)
-            grid_layout.setContentsMargins(10, 10, 10, 10)
-            grid_layout.setSpacing(15)
-            max_columns = 5
-            row, col = 0, 0
+            # Use responsive grid for albums
+            responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
             
-            # Process each album
+            # Process each album and create cards
+            cards = []
             for album_data in albums_data:
                 if not isinstance(album_data, dict):
                     logger.warning(f"[ArtistDetail.load_albums] Skipping non-dict album item: {album_data}")
@@ -842,7 +832,7 @@ class ArtistDetailPage(QWidget):
                 logger.debug(f"[ArtistDetail.load_albums] Album '{album_data.get('title', 'Unknown')}' fields: {list(album_data.keys())}")
                 logger.debug(f"[ArtistDetail.load_albums] Album '{album_data.get('title', 'Unknown')}' picture_url: {album_data.get('picture_url', 'None')}")
                 
-                # Create card directly like Featured In does
+                # Create card
                 try:
                     card = SearchResultCard(album_data)
                     # Connect signals if needed
@@ -851,22 +841,14 @@ class ArtistDetailPage(QWidget):
                     if hasattr(card, 'download_clicked'):
                         card.download_clicked.connect(lambda data=album_data: self._initiate_album_download_for_card(data))
                     
-                    grid_layout.addWidget(card, row, col)
-                    
-                    col += 1
-                    if col >= max_columns:
-                        col = 0
-                        row += 1
-                    
-                    logger.info(f"[ArtistDetail.load_albums] Successfully added card to layout: {album_data.get('title', 'Unknown')}")
+                    cards.append(card)
+                    logger.info(f"[ArtistDetail.load_albums] Successfully created card: {album_data.get('title', 'Unknown')}")
                 except Exception as card_error:
                     logger.error(f"[ArtistDetail.load_albums] Error creating card: {card_error}", exc_info=True)
             
-            # Set the grid widget to the scroll area like Featured In does
-            grid_widget.setLayout(grid_layout)
-            grid_layout.setRowStretch(row + 1, 1)
-            grid_layout.setColumnStretch(max_columns, 1)
-            scroll_area.setWidget(grid_widget)
+            # Set all cards to the responsive grid
+            responsive_grid.set_cards(cards)
+            scroll_area.setWidget(responsive_grid)
             logger.info(f"[ArtistDetail] Displayed {len(albums_data)} albums in grid layout.")
         except Exception as e:
             logger.error(f"[ArtistDetail.load_albums] Exception in load_albums for artist {self.current_artist_id}: {e}", exc_info=True)
@@ -927,15 +909,11 @@ class ArtistDetailPage(QWidget):
                 
                 logger.info(f"[ArtistDetail.load_singles] Found {len(singles_data)} singles for artist {self.current_artist_id}")
                 
-                # Use the same approach as Featured In: create a new widget with QGridLayout
-                grid_widget = QWidget()
-                grid_layout = QGridLayout(grid_widget)
-                grid_layout.setContentsMargins(10, 10, 10, 10)
-                grid_layout.setSpacing(15)
-                max_columns = 5
-                row, col = 0, 0
+                # Use responsive grid for singles
+                responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
                 
-                # Process each single
+                # Process each single and create cards
+                cards = []
                 for single_data in singles_data:
                     if not isinstance(single_data, dict):
                         logger.warning(f"[ArtistDetail.load_singles] Skipping non-dict single item: {single_data}")
@@ -963,7 +941,7 @@ class ArtistDetailPage(QWidget):
                                 single_data['picture_url'] = single_data[field]
                                 break
                     
-                    # Create card directly like Featured In does
+                    # Create card
                     try:
                         card = SearchResultCard(single_data)
                         # Connect signals if needed
@@ -972,22 +950,14 @@ class ArtistDetailPage(QWidget):
                         if hasattr(card, 'download_clicked'):
                             card.download_clicked.connect(lambda data=single_data: self._initiate_album_download_for_card(data))
                         
-                        grid_layout.addWidget(card, row, col)
-                        
-                        col += 1
-                        if col >= max_columns:
-                            col = 0
-                            row += 1
-                        
-                        logger.info(f"[ArtistDetail.load_singles] Successfully added card to layout: {single_data.get('title', 'Unknown')}")
+                        cards.append(card)
+                        logger.info(f"[ArtistDetail.load_singles] Successfully created card: {single_data.get('title', 'Unknown')}")
                     except Exception as card_error:
                         logger.error(f"[ArtistDetail.load_singles] Error creating card: {card_error}", exc_info=True)
                 
-                # Set the grid widget to the scroll area like Featured In does
-                grid_widget.setLayout(grid_layout)
-                grid_layout.setRowStretch(row + 1, 1)
-                grid_layout.setColumnStretch(max_columns, 1)
-                scroll_area.setWidget(grid_widget)
+                # Set all cards to the responsive grid
+                responsive_grid.set_cards(cards)
+                scroll_area.setWidget(responsive_grid)
                 logger.info(f"[ArtistDetail] Displayed {len(singles_data)} singles in grid layout.")
             except asyncio.TimeoutError:
                 logger.error(f"[ArtistDetail.load_singles] Timeout fetching singles for artist {self.current_artist_id}")
@@ -1083,15 +1053,11 @@ class ArtistDetailPage(QWidget):
             
             logger.info(f"[ArtistDetail.load_eps] Found {len(eps_data)} EPs for artist {self.current_artist_id}")
             
-            # Use the same approach as Featured In: create a new widget with QGridLayout
-            grid_widget = QWidget()
-            grid_layout = QGridLayout(grid_widget)
-            grid_layout.setContentsMargins(10, 10, 10, 10)
-            grid_layout.setSpacing(15)
-            max_columns = 5
-            row, col = 0, 0
+            # Use responsive grid for EPs
+            responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
             
-            # Process each EP
+            # Process each EP and create cards
+            cards = []
             for ep_data in eps_data:
                 if not isinstance(ep_data, dict):
                     logger.warning(f"[ArtistDetail.load_eps] Skipping non-dict EP item: {ep_data}")
@@ -1119,7 +1085,7 @@ class ArtistDetailPage(QWidget):
                             ep_data['picture_url'] = ep_data[field]
                             break
                 
-                # Create card directly like Featured In does
+                # Create card
                 try:
                     card = SearchResultCard(ep_data)
                     # Connect signals if needed
@@ -1128,22 +1094,14 @@ class ArtistDetailPage(QWidget):
                     if hasattr(card, 'download_clicked'):
                         card.download_clicked.connect(lambda data=ep_data: self._initiate_album_download_for_card(data))
                     
-                    grid_layout.addWidget(card, row, col)
-                    
-                    col += 1
-                    if col >= max_columns:
-                        col = 0
-                        row += 1
-                    
-                    logger.info(f"[ArtistDetail.load_eps] Successfully added card to layout: {ep_data.get('title', 'Unknown')}")
+                    cards.append(card)
+                    logger.info(f"[ArtistDetail.load_eps] Successfully created card: {ep_data.get('title', 'Unknown')}")
                 except Exception as card_error:
                     logger.error(f"[ArtistDetail.load_eps] Error creating card: {card_error}", exc_info=True)
             
-            # Set the grid widget to the scroll area like Featured In does
-            grid_widget.setLayout(grid_layout)
-            grid_layout.setRowStretch(row + 1, 1)
-            grid_layout.setColumnStretch(max_columns, 1)
-            scroll_area.setWidget(grid_widget)
+            # Set all cards to the responsive grid
+            responsive_grid.set_cards(cards)
+            scroll_area.setWidget(responsive_grid)
             logger.info(f"[ArtistDetail] Displayed {len(eps_data)} EPs in grid layout.")
         except Exception as e:
             logger.error(f"[ArtistDetail] Exception in load_eps for artist {self.current_artist_id}: {e}", exc_info=True)
@@ -1217,13 +1175,11 @@ class ArtistDetailPage(QWidget):
                     playlists_data = [item for item in search_results if item.get('type') == 'playlist']
 
                     if playlists_data:
-                        grid_widget = QWidget()
-                        grid_layout = QGridLayout(grid_widget)
-                        grid_layout.setContentsMargins(10, 10, 10, 10)
-                        grid_layout.setSpacing(15)
-                        max_columns = 5
-                        row, col = 0, 0
-
+                        # Use responsive grid for Featured In playlists
+                        responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
+                        
+                        # Process each playlist and create cards
+                        cards = []
                         for playlist_item_data in playlists_data:
                             # Debug: Log the playlist data being processed
                             print(f"DEBUG: Processing playlist in load_featured_in: ID={playlist_item_data.get('id')}, Title={playlist_item_data.get('title')}")
@@ -1239,17 +1195,11 @@ class ArtistDetailPage(QWidget):
                             # Connect download signal for playlists
                             if hasattr(card, 'download_clicked'):
                                 card.download_clicked.connect(self._initiate_playlist_download_for_card)
-                            grid_layout.addWidget(card, row, col)
-                            
-                            col += 1
-                            if col >= max_columns:
-                                col = 0
-                                row += 1
+                            cards.append(card)
                         
-                        grid_widget.setLayout(grid_layout)
-                        grid_layout.setRowStretch(row + 1, 1)
-                        grid_layout.setColumnStretch(max_columns, 1)
-                        scroll_area.setWidget(grid_widget)
+                        # Set all cards to the responsive grid
+                        responsive_grid.set_cards(cards)
+                        scroll_area.setWidget(responsive_grid)
                         logger.info(f"[ArtistDetail] Displayed {len(playlists_data)} playlists for 'Featured In' section based on artist name: {artist_name}.")
                     else:
                         no_results_label = QLabel(f"No playlists found featuring '{artist_name}'.")

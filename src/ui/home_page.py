@@ -290,7 +290,7 @@ class HomePage(QWidget):
             except Exception as e:
                 logger.error(f"HomePage: Error loading content for '{section_title}': {e}", exc_info=True)
         
-        logger.critical(f"!!!!!!!!!!!!!! HomePage.load_content FINISHED. Total sections in main_content_layout: {self.main_content_layout.count()} !!!!!!!!!!!!!!")
+                logger.critical(f"!!!!!!!!!!!!!! HomePage.load_content FINISHED. Total sections in main_content_layout: {self.main_content_layout.count()} !!!!!!!!!!!!!!")
         self.main_content_layout.addStretch(1) # Add a final stretch to the main page layout
 
     # --- Helper methods for scrolling, adapted from SearchWidget ---

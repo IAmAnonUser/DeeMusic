@@ -24,6 +24,7 @@ from PyQt6.sip import isdeleted as sip_is_deleted # Added import
 # Import the new caching utility
 from utils.image_cache import get_image_from_cache, save_image_to_cache
 from utils.icon_utils import get_icon # ADD THIS IMPORT
+from ui.components.responsive_grid import ResponsiveGridWidget
 
 # Add this global semaphore to limit concurrent downloads
 # This will be shared across all instances of SearchResultCard
@@ -1539,21 +1540,19 @@ class SearchWidget(QWidget):
             self.results_layout.addWidget(constrained_width_container)
 
         elif category_title.lower() in ["albums", "artists", "playlists"]: # Grid views
-            grid_layout = QGridLayout()
-            grid_layout.setSpacing(5) # MODIFIED: Reduced spacing
-            # self.results_layout.addLayout(grid_layout) # Grid added below
-            row, col = 0, 0
-            max_cols = 4 
-            for i, item_data in enumerate(results):
+            responsive_grid = ResponsiveGridWidget(card_min_width=180, card_spacing=15)
+            
+            # Create all cards
+            cards = []
+            for item_data in results:
                 card = SearchResultCard(item_data)
                 card.card_selected.connect(self._handle_card_selection)
                 card.download_clicked.connect(self._handle_card_download_request)
-                grid_layout.addWidget(card, row, col)
-                col += 1
-                if col >= max_cols:
-                    col = 0
-                    row += 1
-            self.results_layout.addLayout(grid_layout) # Add the populated grid
+                cards.append(card)
+                
+            # Add all cards to the responsive grid
+            responsive_grid.set_cards(cards)
+            self.results_layout.addWidget(responsive_grid)
             # self.results_layout.addStretch() # Stretch is added at the end of handle_search_results
         else: # Fallback for unknown category_title, though should not happen with current filters
             logger.warning(f"Unknown category title for display: {category_title}")
@@ -1890,39 +1889,20 @@ class SearchWidget(QWidget):
         section_layout.setContentsMargins(0, 0, 0, 0)
         section_layout.setSpacing(5) # Spacing between header and content for this section
 
-        # Content Area (Grid of Cards) - REPLACED horizontal scroll area
-        content_container_widget = QWidget() 
-        grid_layout = QGridLayout(content_container_widget)
-        grid_layout.setContentsMargins(0, 0, 0, 0) 
-        grid_layout.setSpacing(10) # Spacing between cards
-
-        row, col = 0, 0
-        # Using 4 columns for the grid, similar to other categorized views
-        max_cols = 4 
+        # Content Area (Responsive Grid) - REPLACED fixed grid
+        responsive_grid = ResponsiveGridWidget(card_min_width=180, card_spacing=15)
+        
+        # Create all cards
+        cards = []
         for item_data in items:
             card = SearchResultCard(item_data)
             card.card_selected.connect(self._handle_card_selection)
             card.download_clicked.connect(self._handle_card_download_request)
-            grid_layout.addWidget(card, row, col)
-            col += 1
-            if col >= max_cols:
-                col = 0
-                row += 1
-        
-        # The grid layout will handle alignment. If the last row is not full, 
-        # items will be aligned to the left by default.
-        # Adding a stretch to the grid layout might be needed if items should not expand.
-        # For now, let grid manage card sizes.
-
-        # Wrap the grid in a QHBoxLayout to center it if it's not full-width
-        centering_grid_container = QWidget()
-        centering_grid_layout = QHBoxLayout(centering_grid_container)
-        centering_grid_layout.setContentsMargins(0,0,0,0)
-        centering_grid_layout.addStretch(1) # Add stretch to the left
-        centering_grid_layout.addWidget(content_container_widget) # Add the grid itself
-        centering_grid_layout.addStretch(1) # Add stretch to the right
-
-        section_layout.addWidget(centering_grid_container) # Add the container with the centered grid
+            cards.append(card)
+            
+        # Add all cards to the responsive grid
+        responsive_grid.set_cards(cards)
+        section_layout.addWidget(responsive_grid)
         
         self.results_layout.addWidget(section_frame)
         self.results_layout.addStretch(1) # Pushes content to the top

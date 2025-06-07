@@ -20,6 +20,7 @@ from src.ui.search_widget import SearchResultCard
 from src.ui.track_list_header_widget import TrackListHeaderWidget
 # Import caching utility for main playlist cover
 from utils.image_cache import get_image_from_cache, save_image_to_cache
+from utils.icon_utils import get_icon
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ class PlaylistDetailPage(QWidget):
     album_name_clicked_from_track = pyqtSignal(int)   # Emits album_id when album name clicked in track
     main_playlist_cover_loaded = pyqtSignal(QPixmap) 
     _on_main_cover_artwork_error_signal = pyqtSignal(str)
+    request_full_playlist_download = pyqtSignal(dict, list)  # NEW: For downloading the full playlist
 
     def __init__(self, deezer_api, download_manager, parent=None):
         super().__init__(parent)
@@ -85,11 +87,41 @@ class PlaylistDetailPage(QWidget):
         header_layout.setSpacing(20)
         header_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
-        self.playlist_cover_label = QLabel("Cover") 
+        # Playlist Cover Container (similar to album detail page structure)
+        self.playlist_cover_container = QWidget()
+        self.playlist_cover_container.setFixedSize(160, 160)
+        self.playlist_cover_container.setObjectName("playlist_page_image_container")
+        
+        cover_layout = QGridLayout(self.playlist_cover_container)
+        cover_layout.setContentsMargins(0,0,0,0)
+
+        self.playlist_cover_label = QLabel() 
         self.playlist_cover_label.setFixedSize(160, 160)
         self.playlist_cover_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.playlist_cover_label.setObjectName("playlist_page_image")
-        header_layout.addWidget(self.playlist_cover_label)
+        self.playlist_cover_container.installEventFilter(self)  # Event filter for hover detection
+        cover_layout.addWidget(self.playlist_cover_label, 0, 0)
+        
+        header_layout.addWidget(self.playlist_cover_container)
+
+        # Download button (child of playlist_cover_container)
+        self.playlist_download_button = QPushButton()
+        self.playlist_download_button.setObjectName("PlaylistCoverDownloadButton")
+        download_icon = get_icon("download.png")
+        if download_icon:
+            self.playlist_download_button.setIcon(download_icon)
+            self.playlist_download_button.setIconSize(QSize(24, 24))
+            self.playlist_download_button.setText("")
+        else:
+            self.playlist_download_button.setText("DL")
+            logger.warning("Playlist download button icon not found.")
+        self.playlist_download_button.setFixedSize(QSize(40, 40))
+        self.playlist_download_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.playlist_download_button.setToolTip("Download Playlist")
+        self.playlist_download_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.playlist_download_button.clicked.connect(self._trigger_full_playlist_download)
+        self.playlist_download_button.setVisible(False)
+        cover_layout.addWidget(self.playlist_download_button, 0, 0, Qt.AlignmentFlag.AlignCenter)
 
         # Vertical layout for playlist text details
         playlist_text_details_vbox = QVBoxLayout()
@@ -152,6 +184,61 @@ class PlaylistDetailPage(QWidget):
     def _emit_back_request(self):
         self.back_requested.emit()
 
+    def eventFilter(self, source, event):
+        """Handle hover events for playlist cover to show/hide download button."""
+        if source is self.playlist_cover_container:
+            if event.type() == QEvent.Type.Enter:
+                if self.current_playlist_data: 
+                    self.playlist_download_button.setVisible(True)
+                    self.playlist_download_button.setEnabled(True)
+                    self.playlist_download_button.raise_() 
+                else:
+                    self.playlist_download_button.setVisible(False)
+            elif event.type() == QEvent.Type.Leave:
+                self.playlist_download_button.setVisible(False)
+        return super().eventFilter(source, event)
+
+    @pyqtSlot()
+    def _trigger_full_playlist_download(self):
+        """Trigger the download of the entire playlist."""
+        if not self.current_playlist_data:
+            logger.warning("[PlaylistDetail] _trigger_full_playlist_download called but no playlist data available.")
+            return
+        
+        logger.info(f"[PlaylistDetail] Initiating full playlist download for playlist '{self.current_playlist_data.get('title')}'.")
+        asyncio.create_task(self._prepare_and_emit_full_playlist_download())
+
+    async def _prepare_and_emit_full_playlist_download(self):
+        """Prepare and emit the full playlist download request."""
+        if not self.current_playlist_data:
+            logger.error("[PlaylistDetail] No playlist data available for download.")
+            return
+
+        try:
+            # Get all tracks in the playlist
+            playlist_id = self.current_playlist_id
+            tracks_data = await self.deezer_api.get_playlist_tracks(playlist_id)
+            
+            if not tracks_data or not tracks_data.get('data'):
+                logger.error(f"[PlaylistDetail] No tracks found for playlist {playlist_id}")
+                return
+
+            # Extract track IDs
+            track_ids = []
+            for track in tracks_data['data']:
+                if track.get('id'):
+                    track_ids.append(track['id'])
+
+            if not track_ids:
+                logger.warning(f"[PlaylistDetail] No valid track IDs found in playlist {playlist_id}")
+                return
+
+            logger.info(f"[PlaylistDetail] Emitting request_full_playlist_download for playlist '{self.current_playlist_data.get('title')}' with {len(track_ids)} tracks.")
+            self.request_full_playlist_download.emit(self.current_playlist_data, track_ids)
+
+        except Exception as e:
+            logger.error(f"[PlaylistDetail] Error preparing playlist download: {e}", exc_info=True)
+
     async def load_playlist_details(self, playlist_id):
         logger.info(f"[PlaylistDetail] Attempting to load playlist with ID: {playlist_id}")
         if not self.deezer_api:
@@ -178,6 +265,7 @@ class PlaylistDetailPage(QWidget):
         self.playlist_stats_label.setText("")
         self._set_placeholder_main_playlist_cover()
         self._clear_track_list()
+        self.playlist_download_button.setVisible(False)
 
         try:
             playlist_details = await self.deezer_api.get_playlist_details(playlist_id)

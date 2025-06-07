@@ -700,7 +700,7 @@ class DownloadWorker(QRunnable):
             
             # Determine file type based on quality setting rather than file extension
             # since temporary files have .tmp extension
-            quality = self.download_manager.config.get_setting('downloads.quality', 'MP3_320')
+            quality = self.download_manager.quality  # Use cached quality setting for consistency
             is_mp3 = quality.startswith('MP3_') or quality == 'AAC_64'  # AAC is also handled like MP3
             
             if is_mp3:
@@ -1728,6 +1728,26 @@ class DownloadManager:
         self.signals.download_failed.connect(self._handle_worker_failed)
 
         logger.info(f"DownloadManager initialized. Download dir: {self.download_dir}, Quality: {self.quality}, Concurrent: {max_threads}")
+
+    def refresh_settings(self):
+        """Refresh download manager settings from config when they are changed."""
+        old_quality = self.quality
+        old_download_dir = self.download_dir
+        old_max_threads = self.thread_pool.maxThreadCount()
+        
+        # Update cached settings
+        self.quality = self.config.get_setting('downloads.quality', 'MP3_320')
+        self.download_dir = self._setup_download_dir()
+        max_threads = self.config.get_setting('downloads.concurrent_downloads', 3)
+        self.thread_pool.setMaxThreadCount(max_threads)
+        
+        # Log changes
+        if old_quality != self.quality:
+            logger.info(f"DownloadManager: Quality setting changed from {old_quality} to {self.quality}")
+        if old_download_dir != self.download_dir:
+            logger.info(f"DownloadManager: Download directory changed from {old_download_dir} to {self.download_dir}")
+        if old_max_threads != max_threads:
+            logger.info(f"DownloadManager: Concurrent downloads changed from {old_max_threads} to {max_threads}")
 
     def _handle_worker_finished(self, item_id_str: str):
         if item_id_str in self.active_workers:

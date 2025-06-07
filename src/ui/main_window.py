@@ -65,7 +65,8 @@ class MainWindow(QMainWindow):
         self.queue_manager = DummyQueueManager(self.music_player)  # MODIFIED
         
         self.setWindowTitle("DeeMusic")
-        self.setMinimumSize(1280, 720) # MODIFIED: Adjusted minimum size for new layout
+        self.setMinimumSize(1400, 900) # MODIFIED: Increased width and height to show more content
+        self.resize(1450, 950) # Set initial window size to be wider and taller
         
         # Set up asset paths - Corrected
         self.asset_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'assets')
@@ -205,6 +206,7 @@ class MainWindow(QMainWindow):
         if self.playlist_detail_page:
             self.playlist_detail_page.back_requested.connect(self._handle_back_navigation)
             self.playlist_detail_page.track_selected_for_download.connect(self._handle_track_download_request)
+            self.playlist_detail_page.request_full_playlist_download.connect(self._handle_playlist_download_request)  # NEW: Connect playlist download
             # NEW: Connect artist and album name clicks from tracks to navigation
             self.playlist_detail_page.artist_name_clicked_from_track.connect(self.show_artist_detail)
             self.playlist_detail_page.album_name_clicked_from_track.connect(self.show_album_detail)
@@ -345,12 +347,24 @@ class MainWindow(QMainWindow):
     def handle_settings_changed(self, changes: dict):
         """Handle changes from the settings dialog."""
         logger.info(f"Settings changed: {changes}")
-        # Apply changes (e.g., re-load theme if necessary)
+        
+        # Apply theme changes
         if 'theme' in changes or 'appearance.theme' in changes: # Check for both possible keys from dialog
             self.load_stylesheet() 
             # Update toggle state if theme was changed through settings
             current_theme = self.config.get_setting('appearance.theme', 'light')
             self.theme_toggle_switch.setOn(current_theme == 'dark')
+        
+        # Apply download manager settings changes
+        download_related_changes = [
+            'downloads.quality', 'downloads.path', 'downloads.concurrent_downloads'
+        ]
+        if any(change.startswith('downloads.') for change in changes.keys()):
+            if self.download_manager:
+                logger.info("Refreshing download manager settings due to configuration changes")
+                self.download_manager.refresh_settings()
+            else:
+                logger.warning("Cannot refresh download manager settings - download manager not available")
 
     def load_stylesheet(self):
         """Load and apply the QSS stylesheet based on the current theme."""

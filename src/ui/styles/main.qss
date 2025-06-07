@@ -397,7 +397,8 @@ QWidget#CardHoverButtonsWidget QPushButton:hover, QWidget#TrackArtworkOverlayWid
 /* NEW STYLES for the single overlay action button on SearchResultCard artwork */
 /* AND NOW ALSO FOR THE AlbumDetailPage cover download button */
 QPushButton#OverlayGenericActionButton,
-QPushButton#AlbumCoverDownloadButton { /* MODIFIED SELECTOR */
+QPushButton#AlbumCoverDownloadButton,
+QPushButton#PlaylistCoverDownloadButton { /* MODIFIED SELECTOR */
     background-color: rgba(250, 250, 250, 0.85); /* Light semi-transparent */
     border-radius: 20px; /* MODIFIED: Circular for 40x40 button */
     border: 1px solid rgba(0, 0, 0, 0.1); /* Subtle dark border */
@@ -405,13 +406,15 @@ QPushButton#AlbumCoverDownloadButton { /* MODIFIED SELECTOR */
 }
 
 QPushButton#OverlayGenericActionButton:hover,
-QPushButton#AlbumCoverDownloadButton:hover { /* MODIFIED SELECTOR */
+QPushButton#AlbumCoverDownloadButton:hover,
+QPushButton#PlaylistCoverDownloadButton:hover { /* MODIFIED SELECTOR */
     background-color: rgba(240, 240, 240, 0.9); /* Slightly less transparent on hover */
     border: 1px solid rgba(0, 0, 0, 0.2);
 }
 
 QPushButton#OverlayGenericActionButton:pressed,
-QPushButton#AlbumCoverDownloadButton:pressed { /* MODIFIED SELECTOR */
+QPushButton#AlbumCoverDownloadButton:pressed,
+QPushButton#PlaylistCoverDownloadButton:pressed { /* MODIFIED SELECTOR */
     background-color: rgba(230, 230, 230, 0.95);
 }
 
