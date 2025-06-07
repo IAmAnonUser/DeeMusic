@@ -1,0 +1,599 @@
+/* Global font */
+* {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+}
+
+/* Main window styles */
+QMainWindow {
+    background-color: #F5F2F8;
+}
+
+/* --- REMOVED Sidebar styles --- */
+/*
+#sidebar {
+    background-color: #FFFFFF;
+    border-right: 1px solid #E5E5E5;
+    min-width: 240px;
+    max-width: 240px;
+}
+
+#nav-item {
+    border-radius: 8px;
+    margin: 0 12px;
+}
+
+#nav-item[active="true"] {
+    background-color: #F5F2F8;
+}
+
+#nav-item:hover {
+    background-color: #F5F2F8;
+}
+
+#nav-text {
+    color: #333333;
+    font-size: 14px;
+}
+
+#sidebar-section {
+    color: #666666;
+    font-size: 12px;
+    text-transform: uppercase;
+    padding: 16px 24px;
+    margin-top: 8px;
+}
+*/
+
+/* Logo style (now in top bar) */
+#logo {
+    font-size: 22px; /* Slightly adjusted */
+    font-weight: bold;
+    color: #6C2BD9;
+    /* padding: 0; Removed padding, margins handled by layout */
+}
+
+/* --- REMOVED Player bar styles --- */
+/*
+#player-bar {
+    background-color: #FFFFFF;
+    border-top: 1px solid #E5E5E5;
+    min-height: 80px;
+}
+
+#track-info {
+    color: #333333;
+    font-size: 14px;
+    margin-left: 16px;
+}
+*/
+
+/* General QPushButton style (remains useful) */
+QPushButton {
+    background-color: transparent;
+    border: none;
+    padding: 8px;
+    border-radius: 4px;
+}
+
+QPushButton:hover {
+    background-color: #F5F2F8;
+}
+
+/* Search Bar (now in top bar) */
+#searchBar {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E5E5;
+    border-radius: 8px;
+    padding: 8px 12px; /* Adjusted padding for a more compact look */
+    font-size: 13px; /* Slightly smaller font */
+    /* margin-bottom: 24px; Removed, now part of top bar */
+    min-height: 36px; /* Ensure it has a decent height */
+}
+
+#searchBar:focus {
+    border-color: #6C2BD9;
+    outline: none;
+}
+
+/* Settings button in top bar */
+QPushButton#TopSettingsButton {
+    background-color: transparent;
+    border: none;
+    padding: 4px; /* Minimal padding for an icon button */
+    border-radius: 18px; /* Make it round */
+}
+QPushButton#TopSettingsButton:hover {
+    background-color: #ECEAF0; /* Subtle hover */
+}
+
+/* Theme Toggle Switch in top bar (if it needs specific QSS beyond its own class) */
+/* ToggleSwitch#TopThemeToggle { ... } */
+
+/* Explicit style for Search Filter Buttons (used in SearchWidget) - KEEP */
+QPushButton#SearchFilterButton {
+    font-size: 13px;
+    font-weight: bold;
+    color: #333333;
+    background-color: transparent;
+    border: 1px solid transparent; 
+    padding: 7px 15px; 
+    border-radius: 16px; 
+    margin-right: 8px; 
+}
+
+QPushButton#SearchFilterButton:hover {
+    background-color: #ECEAF0; 
+    color: #333333;
+}
+
+QPushButton#SearchFilterButton:checked {
+    background-color: #6C2BD9; 
+    color: #FFFFFF; 
+    border-color: #6C2BD9; 
+}
+
+QPushButton#SearchFilterButton:checked:hover {
+    background-color: #5A23B6;
+    color: #FFFFFF;
+}
+
+QLabel#SearchSectionHeader {
+    font-size: 14px; 
+    font-weight: bold;
+    color: #333333;
+    padding-top: 15px;    
+    padding-bottom: 10px; 
+    padding-left: 0px; 
+}
+
+QPushButton#ViewAllButton {
+    font-size: 12px;
+    font-weight: normal; 
+    color: #555555;
+    background-color: transparent;
+    border: 1px solid #CCCCCC;
+    padding: 4px 10px; 
+    border-radius: 12px; 
+    margin-left: 8px; 
+}
+
+QPushButton#ViewAllButton:hover {
+    background-color: #EEEEEE;
+    color: #333333;
+    border-color: #BBBBBB;
+}
+
+/* Artist Detail Download Buttons */
+QPushButton#ArtistDownloadButton {
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    background-color: #6C2BD9;
+    border: 1px solid #6C2BD9;
+    padding: 6px 12px;
+    border-radius: 14px;
+    margin: 2px 0;
+}
+
+QPushButton#ArtistDownloadButton:hover {
+    background-color: #5A23B6;
+    border-color: #5A23B6;
+    color: #FFFFFF;
+}
+
+QPushButton#ArtistDownloadButton:pressed {
+    background-color: #4A1B9A;
+    border-color: #4A1B9A;
+}
+
+/* Content area styles */
+#content {
+    background-color: #F5F2F8;
+    border: none;
+}
+
+/* Table styles - KEEP */
+QTableWidget {
+    background-color: #ffffff;
+    border: none;
+    gridline-color: #e5e5e8;
+    color: #32323d;
+}
+
+QTableWidget::item {
+    padding: 12px;
+    border-radius: 6px;
+}
+
+QTableWidget::item:hover {
+    background-color: #F5F2F8;
+}
+
+QHeaderView::section {
+    background-color: #ffffff;
+    color: #72727d;
+    border: none;
+    padding: 12px;
+    font-weight: bold;
+    font-size: 13px;
+}
+
+/* Scrollbar styles - KEEP */
+QScrollBar:vertical {
+    border: none;
+    background-color: #F5F2F8;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #E5E5E5;
+    border-radius: 4px;
+    min-height: 24px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    border: none;
+    background: none;
+}
+
+QScrollBar::up-arrow:vertical,
+QScrollBar::down-arrow:vertical {
+    border: none;
+    background: none;
+}
+
+QScrollBar::add-page:vertical,
+QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+/* Progress bar styles - KEEP (used in DownloadQueueWidget) */
+QProgressBar {
+    border: none;
+    background: #F5F2F8;
+    height: 4px;
+    text-align: center;
+    border-radius: 2px;
+}
+
+QProgressBar::chunk {
+    background: #ef5466;
+    border-radius: 2px;
+}
+
+/* Album card styles (Used in various places) - KEEP */
+#album-card {
+    background-color: transparent;
+    padding: 0;
+    margin: 0;
+}
+
+/* New rules for SearchResultCardFrame */
+QFrame#SearchResultCardFrame {
+    background-color: transparent;
+    border: none; /* Ensure no border is painting a background color */
+}
+
+/* Attempt to make direct QWidget children of the card frame transparent if they don't have specific styles */
+QFrame#SearchResultCardFrame > QWidget {
+    background-color: transparent;
+}
+
+#cover-container {
+    background-color: #FFFFFF;
+    border-radius: 12px;
+    /* position: relative; */ /* May not be needed, check SearchResultCard */
+}
+
+#cover-image {
+    border-radius: 12px;
+}
+
+#play-button {
+    background-color: #6C2BD9;
+    border-radius: 20px;
+    border: none;
+    padding: 8px;
+}
+
+#play-button:hover {
+    background-color: #5A23B6;
+}
+
+#album-title {
+    color: #333333;
+    font-size: 14px;
+    font-weight: bold;
+    margin-top: 8px;
+}
+
+#album-artist {
+    color: #666666;
+    font-size: 12px;
+}
+
+/* Download Queue Title to match search filters appearance */
+QLabel#DownloadQueueTitle {
+    font-size: 13px;   
+    font-weight: bold; 
+    color: #32323D;
+    padding-top: 10px; 
+    padding-bottom: 8px;
+    padding-left: 8px;
+    padding-right: 8px;
+}
+
+/* Vertical Separator Line between content and download queue */
+QFrame#VerticalSeparatorLine {
+    border: none; 
+    background-color: #DCDCDC; 
+    max-width: 1px; 
+    min-width: 1px;
+}
+
+/* Dark theme specific styles (Keep, but ensure they don't conflict with removed elements) */
+/* ... rest of the dark theme ... */
+
+/* --- Artist Detail Page Styles --- (Keep) */
+#artist_header_widget {
+    background-color: transparent; 
+    padding-bottom: 10px; 
+}
+
+QLabel#artist_page_type_label {
+    font-size: 10pt;
+    color: #4A4A4A; /* Darker grey */
+    font-weight: normal;
+    padding-bottom: 2px;
+}
+
+QLabel#artist_page_name_label {
+    font-size: 28pt;
+    font-weight: bold;
+    color: #000000; /* Black */
+    margin-bottom: 2px;
+}
+
+QLabel#artist_page_fan_count_label {
+    font-size: 10pt;
+    color: #2A2A2A; /* Even darker grey */
+}
+
+QTabBar#artist_page_tab_bar::tab {
+    font-size: 13px;
+    font-weight: bold;
+    color: #333333;
+    background-color: transparent;
+    border: 1px solid transparent; 
+    padding: 8px 18px;
+    border-radius: 16px; 
+    margin-right: 8px;
+    min-width: 80px;
+}
+
+QTabBar#artist_page_tab_bar::tab:hover {
+    background-color: #ECEAF0; 
+    color: #333333;
+}
+
+QTabBar#artist_page_tab_bar::tab:selected {
+    background-color: #6C2BD9; 
+    color: #FFFFFF; 
+    border-color: #6C2BD9; 
+}
+
+QTabBar#artist_page_tab_bar::tab:selected:hover {
+    background-color: #5A23B6;
+    color: #FFFFFF;
+}
+
+QTabBar#artist_page_tab_bar {
+    qproperty-drawBase: 0; 
+    border: none;
+    padding-top: 10px; 
+    padding-bottom: 10px;
+    margin-left: 15px; 
+}
+
+/* Back button styling for detail pages - KEEP */
+QPushButton#PageBackButton {
+    border-radius: 20px; 
+    padding: 0px; 
+}
+
+QPushButton#PageBackButton:hover {
+    background-color: #D5D5D5;
+}
+
+/* NEW: Styles for TrackListHeaderWidget */
+QWidget#TrackListHeader {
+    border-bottom: 1px solid #E0E0E0; /* Light border as separator */
+    background-color: #FDFDFD; /* Slightly off-white to differentiate if needed */
+}
+
+QLabel#TrackListHeaderLabel {
+    color: #333333;      /* Dark grey text - CHANGED from #666666 */
+    font-size: 12px;      /* Small font size - INCREASED from 10px */
+    font-weight: bold;    /* Bold text */
+    text-transform: uppercase; /* ALL CAPS */
+    padding: 2px 0px;     /* Vertical padding - DECREASED from 5px */
+}
+
+/* NEW: Track number styling in SearchResultCard */
+QLabel#CardTrackNumberLabel_Track {
+    color: #666666;       /* Medium grey for track numbers */
+    font-size: 12px;      /* Small font size */
+    font-weight: normal;  /* Normal weight */
+    padding: 2px 0px;     /* Vertical padding to match other track elements */
+}
+
+/* Overlay widgets on SearchResultCard artwork */
+/* REMOVE OLD STYLES for now-deleted overlay widgets */
+/*
+QWidget#CardHoverButtonsWidget, QWidget#TrackArtworkOverlayWidget {
+    background-color: rgba(0, 0, 0, 0.65); 
+    border-radius: 8px; 
+}
+
+QWidget#CardHoverButtonsWidget QPushButton, QWidget#TrackArtworkOverlayWidget QPushButton {
+    background-color: transparent; 
+    border: none; 
+    padding: 2px; 
+}
+
+QWidget#CardHoverButtonsWidget QPushButton:hover, QWidget#TrackArtworkOverlayWidget QPushButton:hover {
+    background-color: rgba(255, 255, 255, 0.1); 
+}
+*/
+
+/* NEW STYLES for the single overlay action button on SearchResultCard artwork */
+/* AND NOW ALSO FOR THE AlbumDetailPage cover download button */
+QPushButton#OverlayGenericActionButton,
+QPushButton#AlbumCoverDownloadButton { /* MODIFIED SELECTOR */
+    background-color: rgba(250, 250, 250, 0.85); /* Light semi-transparent */
+    border-radius: 20px; /* MODIFIED: Circular for 40x40 button */
+    border: 1px solid rgba(0, 0, 0, 0.1); /* Subtle dark border */
+    padding: 0px; /* Icon should fill the button, sizing handled by setIconSize and setFixedSize */
+}
+
+QPushButton#OverlayGenericActionButton:hover,
+QPushButton#AlbumCoverDownloadButton:hover { /* MODIFIED SELECTOR */
+    background-color: rgba(240, 240, 240, 0.9); /* Slightly less transparent on hover */
+    border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+QPushButton#OverlayGenericActionButton:pressed,
+QPushButton#AlbumCoverDownloadButton:pressed { /* MODIFIED SELECTOR */
+    background-color: rgba(230, 230, 230, 0.95);
+}
+
+/* Detail Page Header Styles */
+#artist_page_image, #album_page_image, #playlist_page_image {
+    border: 1px solid #444444; /* Darker border for dark theme */
+    background-color: #333333; /* Dark placeholder */
+    /* color: #FFFFFF; */ /* For placeholder text if any */
+}
+#artist_page_image {
+    border-radius: 80px; /* Circular for artists */
+}
+#album_page_image, #playlist_page_image {
+    border-radius: 8px; /* Rounded corners for albums/playlists */
+}
+
+#artist_page_type_label, #album_page_type_label, #playlist_page_type_label {
+    font-size: 10pt;
+    color: #aaaaaa; /* Lighter grey for type label */
+    font-weight: bold; 
+    text-transform: uppercase;
+    padding-left: 2px; /* Small indent to align with main title if needed */
+}
+
+#artist_page_name_label, #album_page_name_label, #playlist_page_name_label {
+    font-size: 24pt; /* Larger main title */
+    font-weight: bold;
+    color: #eeeeee; /* Brighter color for main title */
+    margin-bottom: 3px; /* Small space below main title */
+}
+
+#artist_page_fan_count_label, #album_page_subtitle_label, #playlist_page_subtitle_label {
+    font-size: 11pt;
+    color: #cccccc; /* Mid-grey for subtitles */
+    margin-bottom: 3px;
+    padding-left: 2px; /* Small indent to align with main title if needed */
+}
+
+#album_page_meta_label, #playlist_page_meta_label {
+    font-size: 9pt;
+    color: #999999; /* Darker grey for less prominent meta info */
+    padding-left: 2px; /* Small indent to align with main title if needed */
+}
+
+#playlist_page_description_label {
+    font-size: 10pt;
+    color: #bbbbbb;
+    margin-top: 5px; /* Add some space above description if it's shown */
+    padding-left: 2px;
+}
+
+/* Ensure back button has consistent styling if not already covered */
+#PageBackButton {
+    border: none;
+    background-color: transparent;
+    /* If using SVGs that can be colored by QSS:
+       qproperty-icon: url(path/to/your/themed_back_arrow.svg); 
+       Icon color can be set via font color if the SVG is designed for it,
+       or by using different icon files per theme.
+    */
+}
+#PageBackButton:hover {
+    background-color: rgba(255, 255, 255, 0.1); /* Subtle hover for dark theme */
+}
+
+/* ... rest of QSS ... */
+
+/* Light Theme Album Detail Page Header Styles */
+QLabel#album_page_type_label {
+    font-size: 10pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #4A4A4A; /* Darker grey */
+    padding-left: 2px;
+}
+
+QLabel#album_page_name_label {
+    font-size: 24pt;
+    font-weight: bold;
+    color: #000000; /* Black */
+    margin-bottom: 3px;
+}
+
+QLabel#album_page_subtitle_label {
+    font-size: 11pt;
+    color: #2A2A2A; /* Even darker grey */
+    margin-bottom: 3px;
+    padding-left: 2px;
+}
+
+QLabel#album_page_meta_label {
+    font-size: 9pt;
+    color: #2A2A2A; /* Even darker grey */
+    padding-left: 2px;
+}
+
+/* Light Theme Playlist Detail Page Header Styles */
+QLabel#playlist_page_type_label {
+    font-size: 10pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #4A4A4A; /* Darker grey */
+    padding-left: 2px;
+}
+
+QLabel#playlist_page_name_label {
+    font-size: 24pt;
+    font-weight: bold;
+    color: #000000; /* Black */
+    margin-bottom: 3px;
+}
+
+QLabel#playlist_page_subtitle_label { /* Corresponds to creator */
+    font-size: 11pt;
+    color: #2A2A2A; /* Even darker grey */
+    margin-bottom: 3px;
+    padding-left: 2px;
+}
+
+QLabel#playlist_page_meta_label { /* Corresponds to stats */
+    font-size: 9pt;
+    color: #2A2A2A; /* Even darker grey */
+    padding-left: 2px;
+}
+
+QLabel#playlist_page_description_label {
+    font-size: 10pt;
+    color: #2A2A2A; /* Even darker grey */
+    margin-top: 5px;
+    padding-left: 2px;
+} 

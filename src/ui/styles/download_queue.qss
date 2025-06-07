@@ -1,0 +1,127 @@
+#download-queue-header {
+    background-color: #F5F2F8;
+    border-bottom: 1px solid #E5E5E5;
+}
+
+#download-queue-title {
+    font-size: 16px;
+    font-weight: bold;
+    color: #32323D;
+}
+
+#clear-button {
+    background-color: transparent;
+    border: none;
+    color: #32323D;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+#clear-button:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+#download-title {
+    font-size: 14px;
+    font-weight: bold;
+    color: #32323D;
+}
+
+#download-artist {
+    font-size: 14px;
+    color: #72727D;
+}
+
+#download-status {
+    font-size: 12px;
+    color: #72727D;
+    margin-left: 8px;
+    min-width: 60px;
+}
+
+#download-speed {
+    font-size: 12px;
+    color: #72727D;
+    margin-left: 8px;
+    min-width: 80px;
+}
+
+#download-time {
+    font-size: 12px;
+    color: #72727D;
+    margin-left: 8px;
+    min-width: 100px;
+}
+
+#download-error {
+    font-size: 12px;
+    color: #EF5466;
+    margin-top: 4px;
+}
+
+#cancel-button {
+    background-color: transparent;
+    border: none;
+    color: #72727D;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+#cancel-button:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+    color: #EF5466;
+}
+
+/* Error and Retry Button Styles */
+QPushButton#ErrorButton, QPushButton#GroupErrorButton {
+    background-color: transparent;
+    border: none;
+    border-radius: 12px;
+    padding: 2px;
+}
+
+QPushButton#ErrorButton:hover, QPushButton#GroupErrorButton:hover {
+    background-color: rgba(239, 84, 102, 0.1);
+}
+
+QPushButton#RetryButton, QPushButton#GroupRetryButton {
+    background-color: transparent;
+    border: 1px solid #72727D;
+    border-radius: 12px;
+    color: #72727D;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 2px;
+}
+
+QPushButton#RetryButton:hover, QPushButton#GroupRetryButton:hover {
+    background-color: rgba(59, 200, 231, 0.1);
+    border-color: #3BC8E7;
+    color: #3BC8E7;
+}
+
+QPushButton#RetryButton:pressed, QPushButton#GroupRetryButton:pressed {
+    background-color: rgba(59, 200, 231, 0.2);
+}
+
+QProgressBar {
+    border: none;
+    background-color: #E5E5E5;
+    height: 4px;
+    border-radius: 2px;
+    text-align: center;
+}
+
+QProgressBar::chunk {
+    background-color: #3BC8E7;
+    border-radius: 2px;
+}
+
+QScrollArea {
+    border: none;
+    background-color: white;
+}
+
+QWidget#downloads-container {
+    background-color: white;
+} 
