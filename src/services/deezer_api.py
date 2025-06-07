@@ -1862,13 +1862,10 @@ class DeezerAPI:
         Returns:
             A dictionary containing artist details, or None if an error occurs.
         """
-        if not await self._ensure_session_and_tokens():
-            logger.error(f"DeezerAPI not ready for get_artist_details (artist_id: {artist_id}). Session or tokens missing.")
-            return None
-
-        session = await self._get_session() # Should be valid if _ensure_session_and_tokens passed
-        if not session: # Double check, though _ensure_session_and_tokens should have caught this
-             logger.error(f"Session not available for get_artist_details (artist_id: {artist_id}) even after ensure.")
+        # For basic artist info, we don't need tokens - just a session
+        session = await self._get_session()
+        if not session:
+             logger.error(f"Session not available for get_artist_details (artist_id: {artist_id}).")
              return None
 
         url = f"{self.PUBLIC_API_BASE}/artist/{artist_id}"
