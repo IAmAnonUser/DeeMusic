@@ -1,11 +1,11 @@
 # 🎵 DeeMusic
 
-A modern, feature-rich desktop application for streaming, downloading, and managing music from Deezer with an intuitive PyQt6 GUI interface, comprehensive metadata management, and advanced download capabilities.
+A modern, feature-rich desktop application for streaming, downloading, and managing music from D**zer with an intuitive PyQt6 GUI interface, comprehensive metadata management, and advanced download capabilities.
 
 ## ✨ Features
 
 ### 🎯 Core Features
-- **🎵 Deezer Integration**: Stream and download music directly from Deezer's extensive catalog
+- **🎵 D**zer Integration**: Stream and download music directly from D**zer's extensive catalog
 - **🎨 Modern GUI**: Beautiful, responsive PyQt6 interface with dark/light theme support
 - **⬇️ Advanced Downloads**: Multi-threaded downloading with queue management
 - **🔍 Smart Search**: Search tracks, albums, artists, and playlists with real-time results
@@ -26,7 +26,6 @@ A modern, feature-rich desktop application for streaming, downloading, and manag
 ### 🌐 Network & Performance
 - **🚀 Concurrent Downloads**: Multiple simultaneous downloads with progress tracking
 - **🔄 Resume Support**: Pause and resume downloads seamlessly
-- **🌐 Proxy Support**: HTTP/HTTPS proxy configuration for restricted networks
 - **💾 Smart Caching**: Image and metadata caching for improved performance
 
 ## 🚀 Quick Start
@@ -34,7 +33,7 @@ A modern, feature-rich desktop application for streaming, downloading, and manag
 ### Prerequisites
 - **Python 3.11+** (recommended)
 - **Windows 10/11** (primary support)
-- **Deezer ARL Token** (see Configuration section)
+- **D**zer ARL Token** (see Configuration section)
 
 ### Installation
 
@@ -71,14 +70,14 @@ python run.py
 
 ## ⚙️ Configuration
 
-### Deezer ARL Token
-To download music, you need a valid Deezer ARL token:
+### D**zer ARL Token
+To download music, you need a valid D**zer ARL token:
 
-1. Log into your Deezer account in a web browser
+1. Log into your D**zer account in a web browser
 2. Open browser Developer Tools (F12)
-3. Go to Application/Storage → Cookies → `https://www.deezer.com`
+3. Go to Application/Storage → Cookies → `https://www.D**zer.com`
 4. Find the `arl` cookie and copy its value
-5. In DeeMusic, go to Settings → Deezer Settings and paste the ARL token
+5. In DeeMusic, go to Settings → D**zer Settings and paste the ARL token
 
 ### Settings Overview
 - **Download Quality**: Choose between MP3 320kbps and FLAC
@@ -92,11 +91,11 @@ To download music, you need a valid Deezer ARL token:
 
 ```
 DeeMusic/
-├── src/
+├── src/                       # Source Code
 │   ├── ui/                     # User Interface Components
 │   │   ├── components/         # Reusable UI widgets
 │   │   ├── styles/            # QSS stylesheets
-│   │   ├── assets/            # Icons and images
+│   │   ├── assets/            # Icons, images, and logo
 │   │   ├── main_window.py     # Main application window
 │   │   ├── home_page.py       # Home page with charts
 │   │   ├── search_widget.py   # Search functionality
@@ -104,7 +103,7 @@ DeeMusic/
 │   │   ├── album_detail_page.py  # Album details view
 │   │   └── playlist_detail_page.py # Playlist details view
 │   ├── services/              # Backend Services
-│   │   ├── deezer_api.py      # Deezer API integration
+│   │   ├── D**zer_api.py      # D**zer API integration
 │   │   ├── download_manager.py # Download orchestration
 │   │   ├── music_player.py    # Audio playback
 │   │   ├── library_manager.py # Local library management
@@ -116,155 +115,78 @@ DeeMusic/
 │   ├── models/                # Data Models
 │   │   └── database.py        # Database schema
 │   └── config_manager.py      # Configuration management
-├── tests/                     # Unit and integration tests
-├── docs/                      # Documentation
+├── tools/                     # Build Scripts & Tools
+│   ├── build.py               # Main executable builder (PyInstaller)
+│   ├── create_simple_installer.py # Windows installer creator
+│   ├── build_installer.py     # Professional Inno Setup builder
+│   ├── installer.iss          # Inno Setup script
+│   └── README.md              # Build tools documentation
+├── docs/                      # Documentation & Release Notes
+├── dist/                      # Built executables (generated)
+├── build/                     # Build artifacts (generated)
+├── venv_py311/               # Python virtual environment
 ├── requirements.txt           # Python dependencies
 ├── run.py                     # Application entry point
 └── README.md                  # This file
 ```
 
-## 🔧 Building Executable (EXE)
+## 🔧 Building & Distribution
 
-You can compile DeeMusic into a standalone executable using PyInstaller:
+### 📦 Quick Build
+Build a standalone Windows executable with custom icon:
 
-### 1. Install PyInstaller
 ```bash
-pip install pyinstaller
+# Build executable only
+python tools/build.py
+
+# Build + create installer package  
+python tools/build.py
+python tools/create_simple_installer.py
 ```
 
-### 2. Basic Build
-```bash
-pyinstaller --onefile --windowed run.py
-```
+**Output:**
+- `dist/DeeMusic.exe` - Standalone executable with custom icon
+- `DeeMusic_Installer_v1.0.0.zip` - Installer package for distribution
 
-### 3. Advanced Build (Recommended)
-Create a `build.py` file for a more sophisticated build:
+### 🛠️ Build Tools Overview
 
-```python
-import PyInstaller.__main__
-import sys
-import os
+| Tool | Purpose | Output | Requirements |
+|------|---------|--------|-------------|
+| `tools/build.py` | Main executable builder | `dist/DeeMusic.exe` | PyInstaller |
+| `tools/create_simple_installer.py` | Windows installer package | `.zip` installer | None |
+| `tools/build_installer.py` | Professional installer | `.exe` installer (~82MB) | Inno Setup |
 
-# Build configuration
-PyInstaller.__main__.run([
-    'run.py',
-    '--onefile',
-    '--windowed',
-    '--name=DeeMusic',
-    '--icon=src/ui/assets/logo.ico',  # If you have an icon file
-    '--add-data=src/ui/assets;src/ui/assets',
-    '--add-data=src/ui/styles;src/ui/styles',
-    '--hidden-import=PyQt6',
-    '--hidden-import=qasync',
-    '--hidden-import=mutagen',
-    '--hidden-import=requests',
-    '--hidden-import=aiohttp',
-    '--collect-submodules=PyQt6',
-    '--distpath=dist',
-    '--workpath=build',
-    '--clean',
-])
-```
+### 🚀 Professional Installer (Optional)
+For enterprise distribution with registry integration:
 
-Run the build:
-```bash
-python build.py
-```
+1. **Install Inno Setup:** Download from [jrsoftware.org](https://jrsoftware.org/isdl.php)
+2. **Build:** `python tools/build_installer.py`
+3. **Output:** Professional `.exe` installer with wizard interface
 
-### 4. Build Options Explained
-- `--onefile`: Creates a single executable file
-- `--windowed`: Hides the console window (GUI app)
-- `--name`: Sets the executable name
-- `--icon`: Adds an application icon
-- `--add-data`: Includes additional files (assets, styles)
-- `--hidden-import`: Ensures specific modules are included
-- `--collect-submodules`: Includes all PyQt6 submodules
+### 📋 Build Features
+- **Custom Icon**: Professional DeeMusic branding throughout Windows
+- **Optimized Size**: Standalone executable (includes all dependencies)
+- **Multiple Install Options**: Program Files, portable, current directory
+- **Start Menu Integration**: Shortcuts and file associations
+- **Professional Uninstaller**: Clean removal with settings cleanup option
+- **Settings Preservation**: Configurations stored in `%AppData%\DeeMusic`
 
-### 5. After Building
-The executable will be in the `dist/` folder. You can distribute this single file, and it will run on Windows systems without requiring Python installation.
+### 🔧 Build Configuration
+Customize builds by editing `tools/build.py`:
+- Icon file path and build optimizations
+- Excluded modules and hidden imports  
+- Output directory and file naming
 
-### 6. Build Optimization
-For smaller executable size:
-```bash
-# Install UPX for compression
-# Download from: https://upx.github.io/
-
-pyinstaller --onefile --windowed --upx-dir=path/to/upx run.py
-```
+For detailed build instructions, see `tools/README.md`.
 
 ## 🚦 Usage
 
 ### Basic Workflow
-1. **Setup**: Configure your Deezer ARL token in Settings
+1. **Setup**: Configure your D**zer ARL token in Settings
 2. **Discover**: Browse charts, search for music, or explore recommendations
-3. **Preview**: Click any track to preview (30-second samples)
-4. **Download**: Click the download button on tracks, albums, or playlists
-5. **Monitor**: Track download progress in the Download Queue
-6. **Enjoy**: Find your music in the configured download directory
-
-### Keyboard Shortcuts
-- `Ctrl+F`: Focus search box
-- `Ctrl+D`: Open download queue
-- `Ctrl+S`: Open settings
-- `Space`: Play/pause current preview
-- `Escape`: Stop current preview
-
-## 🔧 Dependencies
-
-### Core Libraries
-- **PyQt6**: Modern GUI framework
-- **qasync**: Asyncio integration for Qt
-- **aiohttp**: Async HTTP client for API calls
-- **mutagen**: Audio metadata processing
-- **requests**: HTTP library for downloads
-
-### Deezer Integration
-- **py-deezer**: Official Deezer API wrapper
-- **deezer-py**: Extended Deezer functionality
-
-### Audio & Media
-- **yt-dlp**: Media downloading capabilities
-- **Pillow**: Image processing
-- **cryptography**: Decryption support
-
-### Development
-- **pytest**: Testing framework
-- **black**: Code formatting
-- **mypy**: Type checking
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**"Loading timed out" errors:**
-- Check your internet connection
-- Verify proxy settings if behind corporate firewall
-- Ensure Deezer ARL token is valid
-
-**Downloads failing:**
-- Verify ARL token is still valid (they expire)
-- Check download directory permissions
-- Ensure sufficient disk space
-
-**UI not responding:**
-- Close and restart the application
-- Check logs in `logs/` directory
-- Clear image cache in Settings
-
-**Virtual environment issues:**
-- Recreate virtual environment: `python -m venv venv_py311`
-- Use direct Python path: `C:\Users\[USER]\AppData\Local\Programs\Python\Python311\python.exe run.py`
-
-### Logging
-Enable debug logging by setting environment variable:
-```bash
-set DEEMUSIC_DEBUG=1
-python run.py
-```
-
-## 🤝 Contributing
-
-We welcome contributions! Here's how you can help:
+3. **Download**: Click the download button on tracks, albums, or playlists
+4. **Monitor**: Track download progress in the Download Queue
+5. **Enjoy**: Find your music in the configured download directory
 
 ### Development Setup
 1. Fork the repository
@@ -275,24 +197,14 @@ We welcome contributions! Here's how you can help:
 6. Format code: `black src/`
 7. Submit a pull request
 
-### Code Style
-- Follow PEP 8 guidelines
-- Use type hints where possible
-- Write docstrings for all public methods
-- Add unit tests for new features
-
 ### Reporting Issues
 - Use the GitHub Issues page
 - Include system information (OS, Python version)
 - Provide detailed reproduction steps
 - Attach relevant log files
 
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 ## ⚠️ Disclaimer
 
-This application is for educational purposes only. Users are responsible for complying with Deezer's Terms of Service and applicable copyright laws. The developers are not responsible for any misuse of this software.
+This application is for educational purposes only. Users are responsible for complying with D**zer's Terms of Service and applicable copyright laws. The developers are not responsible for any misuse of this software.
 
 

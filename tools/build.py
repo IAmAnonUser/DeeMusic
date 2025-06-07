@@ -30,8 +30,8 @@ def build_application():
     """Build the application executable."""
     print("Building DeeMusic executable...")
     
-    # Get current directory
-    current_dir = Path(__file__).parent.absolute()
+    # Get project root directory (parent of tools directory)
+    current_dir = Path(__file__).parent.parent.absolute()
     
     # Define paths
     assets_path = current_dir / "src" / "ui" / "assets"
@@ -39,14 +39,14 @@ def build_application():
     
     # Build arguments
     build_args = [
-        'run.py',
+        str(current_dir / 'run.py'),
         '--onefile',
         '--windowed',
         '--name=DeeMusic',
-        '--distpath=dist',
-        '--workpath=build',
-        '--specpath=build',
-        '--paths=src',  # Add src directory to Python path
+        f'--distpath={current_dir}/dist',
+        f'--workpath={current_dir}/build', 
+        f'--specpath={current_dir}/build',
+        f'--paths={current_dir}/src',  # Add src directory to Python path
         '--clean',
         
         # Hide imports to ensure they're included
