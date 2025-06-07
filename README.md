@@ -89,6 +89,7 @@ To download music, you need a valid Deezer ARL token:
 - **Network Settings**: Proxy configuration and connection timeouts
 - **UI Theme**: Dark/Light theme selection
 
+<<<<<<< HEAD
 ## 🏗️ Project Structure
 
 ```
@@ -314,3 +315,4 @@ This application is for educational purposes only. Users are responsible for com
 <p align="center">
   <strong>🎵 Made with ❤️ for music lovers everywhere 🎵</strong>
 </p>
+
