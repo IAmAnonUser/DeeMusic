@@ -325,13 +325,7 @@ QLabel#DownloadQueueTitle {
     padding-right: 8px;
 }
 
-/* Vertical Separator Line between content and download queue */
-QFrame#VerticalSeparatorLine {
-    border: none; 
-    background-color: #DCDCDC; 
-    max-width: 1px; 
-    min-width: 1px;
-}
+
 
 /* Dark theme specific styles (Keep, but ensure they don't conflict with removed elements) */
 /* ... rest of the dark theme ... */
@@ -361,41 +355,7 @@ QLabel#artist_page_fan_count_label {
     color: #2A2A2A; /* Even darker grey */
 }
 
-QTabBar#artist_page_tab_bar::tab {
-    font-size: 13px;
-    font-weight: bold;
-    color: #333333;
-    background-color: transparent;
-    border: 1px solid transparent; 
-    padding: 8px 18px;
-    border-radius: 16px; 
-    margin-right: 8px;
-    min-width: 80px;
-}
 
-QTabBar#artist_page_tab_bar::tab:hover {
-    background-color: #ECEAF0; 
-    color: #333333;
-}
-
-QTabBar#artist_page_tab_bar::tab:selected {
-    background-color: #6C2BD9; 
-    color: #FFFFFF; 
-    border-color: #6C2BD9; 
-}
-
-QTabBar#artist_page_tab_bar::tab:selected:hover {
-    background-color: #5A23B6;
-    color: #FFFFFF;
-}
-
-QTabBar#artist_page_tab_bar {
-    qproperty-drawBase: 0; 
-    border: none;
-    padding-top: 10px; 
-    padding-bottom: 10px;
-    margin-left: 15px; 
-}
 
 /* Back button styling for detail pages - KEEP */
 QPushButton#PageBackButton {
@@ -405,20 +365,6 @@ QPushButton#PageBackButton {
 
 QPushButton#PageBackButton:hover {
     background-color: #D5D5D5;
-}
-
-/* NEW: Styles for TrackListHeaderWidget */
-QWidget#TrackListHeader {
-    border-bottom: 1px solid #E0E0E0; /* Light border as separator */
-    background-color: #FDFDFD; /* Slightly off-white to differentiate if needed */
-}
-
-QLabel#TrackListHeaderLabel {
-    color: #333333;      /* Dark grey text - CHANGED from #666666 */
-    font-size: 12px;      /* Small font size - INCREASED from 10px */
-    font-weight: bold;    /* Bold text */
-    text-transform: uppercase; /* ALL CAPS */
-    padding: 2px 0px;     /* Vertical padding - DECREASED from 5px */
 }
 
 /* NEW: Track number styling in SearchResultCard */

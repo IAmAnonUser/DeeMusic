@@ -498,7 +498,7 @@ class MainWindow(QMainWindow):
         self.theme_manager.current_theme = current_theme
         # self.theme_manager.apply_theme_to_icons(self) # Apply icon theme # REMOVED
 
-        self._setup_menu_bar() # Keep menu bar for now
+
         
         # Initialize status bar (optional, can be removed if not needed)
         self.status_bar = QStatusBar()
@@ -798,16 +798,7 @@ class MainWindow(QMainWindow):
         else:
             logger.error("[MainWindow] Search widget page is not initialized.") # MODIFIED
 
-    def _setup_menu_bar(self):
-        """Set up the menu bar."""
-        menubar = self.menuBar()
-        
-        # Settings action in File menu
-        file_menu = menubar.addMenu('File')
-        settings_action = QAction('Settings...', self)
-        settings_action.setStatusTip('Open application settings')
-        settings_action.triggered.connect(self.show_settings)
-        file_menu.addAction(settings_action)
+
 
     def _switch_to_view(self, target_index: int, is_back_navigation: bool = False):
         """Switches the view in the content_stack and manages history."""

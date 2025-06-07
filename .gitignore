@@ -65,6 +65,7 @@ download_queue_state.json
 debugging_progress.md
 *.docx
 DOWNLOAD_SYSTEM_DOCUMENTATION.md
+TECHNICAL_DOCUMENTATION.md
 
 # Installer files
 installer_simple/

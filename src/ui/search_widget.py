@@ -38,6 +38,58 @@ class ClickableLabel(QLabel):
     def __init__(self, text="", parent=None):
         super().__init__(text, parent)
         self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._original_text = text
+        self._is_hovered = False
+        
+    def enterEvent(self, event):
+        """Handle mouse enter - add hover effect"""
+        self._is_hovered = True
+        self._update_hover_style()
+        super().enterEvent(event)
+        
+    def leaveEvent(self, event):
+        """Handle mouse leave - remove hover effect"""
+        self._is_hovered = False
+        self._update_hover_style()
+        super().leaveEvent(event)
+        
+    def _get_current_theme(self):
+        """Get the current theme from the main application"""
+        try:
+            # Get the main window from the application
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app:
+                for widget in app.topLevelWidgets():
+                    if hasattr(widget, 'theme_manager'):
+                        return widget.theme_manager.current_theme
+            # Fallback: detect from config file
+            from pathlib import Path
+            import json
+            config_path = Path.home() / ".deemusic" / "config.json"
+            if config_path.exists():
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+                    return config.get("theme", "dark")
+        except:
+            pass
+        return "dark"  # Default fallback
+        
+    def _update_hover_style(self):
+        """Update the visual style based on hover state"""
+        if self._is_hovered:
+            # Check current theme to apply appropriate hover color
+            object_name = self.objectName()
+            if object_name == "CardArtistLabel_Track" or object_name == "CardAlbumLabel_Track":
+                current_theme = self._get_current_theme()
+                # Use appropriate purple color based on theme
+                hover_color = "#A238FF" if current_theme == "dark" else "#6C2BD9"
+                
+                # Apply hover styling
+                self.setStyleSheet(f"QLabel {{ color: {hover_color}; text-decoration: underline; }}")
+        else:
+            # Remove hover styling - let theme handle normal color
+            self.setStyleSheet("")
         
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:

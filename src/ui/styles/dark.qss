@@ -1,0 +1,454 @@
+/* Global font */
+* {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+}
+
+/* Main window styles - Dark Theme */
+QMainWindow {
+    background-color: #121212;
+}
+
+/* Logo style (now in top bar) - Dark Theme */
+#logo {
+    font-size: 22px;
+    font-weight: bold;
+    color: #A238FF;
+}
+
+/* General QPushButton style - Dark Theme */
+QPushButton {
+    background-color: transparent;
+    border: none;
+    padding: 8px;
+    border-radius: 4px;
+    color: #FFFFFF;
+}
+
+QPushButton:hover {
+    background-color: #2A2A33;
+}
+
+/* Search Bar (now in top bar) - Dark Theme */
+#searchBar {
+    background-color: #2E2E2E;
+    border: 1px solid #555555;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    min-height: 36px;
+    color: #FFFFFF;
+}
+
+#searchBar:focus {
+    border-color: #A238FF;
+    outline: none;
+}
+
+/* Settings button in top bar - Dark Theme */
+QPushButton#TopSettingsButton {
+    background-color: transparent;
+    border: none;
+    padding: 4px;
+    border-radius: 18px;
+    color: #CCCCCC;
+}
+QPushButton#TopSettingsButton:hover {
+    background-color: #3A2D4F;
+}
+
+/* Search Filter Buttons - Dark Theme */
+QPushButton#SearchFilterButton {
+    font-size: 13px;
+    font-weight: bold;
+    color: #CCCCCC;
+    background-color: transparent;
+    border: 1px solid transparent; 
+    padding: 7px 15px; 
+    border-radius: 16px; 
+    margin-right: 8px; 
+}
+
+QPushButton#SearchFilterButton:hover {
+    background-color: #2A2A33; 
+    color: #FFFFFF;
+}
+
+QPushButton#SearchFilterButton:checked {
+    background-color: #A238FF; 
+    color: #FFFFFF; 
+    border-color: #A238FF; 
+}
+
+QPushButton#SearchFilterButton:checked:hover {
+    background-color: #B86EFF;
+    color: #FFFFFF;
+}
+
+QLabel#SearchSectionHeader {
+    font-size: 14px; 
+    font-weight: bold;
+    color: #FFFFFF;
+    padding-top: 15px;    
+    padding-bottom: 10px; 
+    padding-left: 0px; 
+}
+
+QPushButton#ViewAllButton {
+    font-size: 12px;
+    font-weight: normal; 
+    color: #AAAAAA;
+    background-color: transparent;
+    border: 1px solid #555555;
+    padding: 4px 10px; 
+    border-radius: 12px; 
+    margin-left: 8px; 
+}
+
+QPushButton#ViewAllButton:hover {
+    background-color: #3C3C3C;
+    color: #FFFFFF;
+    border-color: #777777;
+}
+
+/* Artist Detail Download Buttons - Dark Theme */
+QPushButton#ArtistDownloadButton {
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    background-color: #A238FF;
+    border: 1px solid #A238FF;
+    padding: 6px 12px;
+    border-radius: 14px;
+    margin: 2px 0;
+}
+
+QPushButton#ArtistDownloadButton:hover {
+    background-color: #B86EFF;
+    border-color: #B86EFF;
+    color: #FFFFFF;
+}
+
+QPushButton#ArtistDownloadButton:pressed {
+    background-color: #8A2EE5;
+    border-color: #8A2EE5;
+}
+
+/* Content area styles - Dark Theme */
+#content {
+    background-color: #121212;
+    border: none;
+}
+
+/* Table styles - Dark Theme */
+QTableWidget {
+    background-color: #1C1C24;
+    border: none;
+    gridline-color: #333333;
+    color: #FFFFFF;
+}
+
+QTableWidget::item {
+    padding: 8px;
+    border-bottom: 1px solid #333333;
+    color: #FFFFFF;
+}
+
+QTableWidget::item:selected {
+    background-color: #3A2D4F;
+    color: #FFFFFF;
+}
+
+QTableWidget::item:hover {
+    background-color: #2A2A33;
+}
+
+QHeaderView::section {
+    background-color: #1C1C24;
+    color: #CCCCCC;
+    padding: 8px;
+    border: none;
+    border-bottom: 1px solid #333333;
+    font-weight: bold;
+}
+
+/* ScrollBar styles - Dark Theme */
+QScrollBar:vertical {
+    background-color: #2C2C2C;
+    width: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #555555;
+    border-radius: 6px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #777777;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: #2C2C2C;
+    height: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #555555;
+    border-radius: 6px;
+    min-width: 20px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #777777;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+/* Label styles - Dark Theme */
+QLabel {
+    color: #FFFFFF;
+}
+
+/* Scroll Areas - Dark Theme */
+QScrollArea {
+    background-color: #121212;
+    border: none;
+}
+
+QScrollArea > QWidget > QWidget {
+    background-color: #121212;
+}
+
+/* Frame styles - Dark Theme */
+QFrame {
+    background-color: #1C1C24;
+    border: none;
+}
+
+/* Widget styles - Dark Theme */
+QWidget {
+    background-color: #121212;
+    color: #FFFFFF;
+}
+
+/* Input styles - Dark Theme */
+QLineEdit {
+    background-color: #2E2E2E;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    padding: 6px;
+    color: #FFFFFF;
+}
+
+QLineEdit:focus {
+    border-color: #A238FF;
+}
+
+/* ComboBox styles - Dark Theme */
+QComboBox {
+    background-color: #2E2E2E;
+    border: 1px solid #555555;
+    border-radius: 4px;
+    padding: 6px;
+    color: #FFFFFF;
+}
+
+QComboBox:hover {
+    border-color: #777777;
+}
+
+QComboBox::drop-down {
+    border: none;
+    background-color: transparent;
+}
+
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid #CCCCCC;
+    margin-right: 6px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #2E2E2E;
+    border: 1px solid #555555;
+    color: #FFFFFF;
+    selection-background-color: #A238FF;
+}
+
+/* CheckBox styles - Dark Theme */
+QCheckBox {
+    color: #FFFFFF;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #555555;
+    border-radius: 3px;
+    background-color: #2E2E2E;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #A238FF;
+    border-color: #A238FF;
+}
+
+QCheckBox::indicator:checked:hover {
+    background-color: #B86EFF;
+}
+
+/* Toggle Switch styles - Dark Theme */
+QCheckBox#ToggleSwitchNative {
+    spacing: 0px;
+}
+
+QCheckBox#ToggleSwitchNative::indicator {
+    width: 50px;
+    height: 26px;
+    border-radius: 13px;
+    background-color: #555555;
+    border: none;
+    background-image: url(none);
+    background-repeat: no-repeat;
+    background-position: left center;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:unchecked {
+    background-color: #555555;
+    background-image: radial-gradient(circle, #FFFFFF 8px, transparent 8px);
+    background-position: 4px center;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:checked {
+    background-color: #A238FF;
+    background-image: radial-gradient(circle, #FFFFFF 8px, transparent 8px);
+    background-position: 24px center;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:hover:unchecked {
+    background-color: #666666;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:hover:checked {
+    background-color: #B86EFF;
+}
+
+/* Artist/Album/Playlist Detail Page Header Styles - Dark Theme */
+#artist_page_type_label, #album_page_type_label, #playlist_page_type_label {
+    font-size: 10pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #AAAAAA;
+    padding-left: 2px;
+}
+
+#artist_page_name_label, #album_page_name_label, #playlist_page_name_label {
+    font-size: 24pt;
+    font-weight: bold;
+    color: #FFFFFF;
+    margin-bottom: 3px;
+}
+
+#artist_page_fan_count_label, #album_page_subtitle_label, #playlist_page_subtitle_label {
+    font-size: 11pt;
+    color: #CCCCCC;
+    margin-bottom: 3px;
+    padding-left: 2px;
+}
+
+#album_page_meta_label, #playlist_page_meta_label {
+    font-size: 9pt;
+    color: #AAAAAA;
+    padding-left: 2px;
+}
+
+#playlist_page_description_label {
+    font-size: 10pt;
+    color: #CCCCCC;
+    margin-top: 5px;
+    padding-left: 2px;
+}
+
+/* Artist Detail Page Tab Bar - Dark Theme */
+QTabBar#artist_page_tab_bar::tab {
+    font-size: 13px;
+    font-weight: bold;
+    color: #CCCCCC;
+    background-color: transparent;
+    border: 1px solid transparent; 
+    padding: 7px 15px;
+    border-radius: 16px; 
+    margin-right: 8px;
+    min-width: 60px;
+}
+
+QTabBar#artist_page_tab_bar::tab:hover {
+    background-color: #2A2A33; 
+    color: #FFFFFF;
+}
+
+QTabBar#artist_page_tab_bar::tab:selected {
+    background-color: #A238FF; 
+    color: #FFFFFF; 
+    border-color: #A238FF; 
+}
+
+QTabBar#artist_page_tab_bar::tab:selected:hover {
+    background-color: #B86EFF;
+    color: #FFFFFF;
+}
+
+QTabBar#artist_page_tab_bar {
+    qproperty-drawBase: 0; 
+    border: none;
+    padding-top: 10px; 
+    padding-bottom: 10px;
+    margin-left: 15px; 
+}
+
+/* Back button - Dark Theme */
+#PageBackButton {
+    border: none;
+    background-color: transparent;
+    color: #CCCCCC;
+}
+
+#PageBackButton:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #FFFFFF;
+}
+
+/* Track List Headers - Dark Theme */
+QLabel#TrackListHeaderLabel, QLabel#SearchTrackListHeaderLabel {
+    color: #CCCCCC;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+QWidget#TrackListHeader, QWidget#SearchTrackListHeader {
+    border-bottom: 1px solid #444444;
+    background-color: #1A1A1A;
+}
+
+/* Vertical Separator Line - Dark Theme */
+QFrame#VerticalSeparatorLine {
+    border: none;
+    background-color: #444444;
+    max-width: 1px;
+    min-width: 1px;
+    margin: 5px 0px;
+}
+
+/* Download Queue specific styles will be loaded from download_queue.qss */ 

@@ -199,7 +199,7 @@ class HomePage(QWidget):
         # --- Define section loading configurations ---
         sections_to_load = [
             # {"title": "Top Charts", "api_call": self.deezer_api.get_charts_all_types, "item_type": "chart_multi", "limit": 10, "card_type_field": 'type'}, # REMOVED - Method does not exist
-            {"title": "New Releases", "api_call": self.deezer_api.get_chart_albums, "item_type": "album", "limit": 25, "card_type_field": None}, # MODIFIED for available API method, limit changed to 25
+            {"title": "New Releases", "api_call": self.deezer_api.get_editorial_releases, "item_type": "album", "limit": 25, "card_type_field": None}, # MODIFIED to use editorial releases for actual new releases
             {"title": "Popular Playlists", "api_call": self.deezer_api.get_chart_playlists, "item_type": "playlist", "limit": 25, "card_type_field": None}, # limit changed to 25
             {"title": "Most Streamed Artists", "api_call": self.deezer_api.get_chart_artists, "item_type": "artist", "limit": 25, "card_type_field": None}, # limit changed to 25
             {"title": "Top Albums", "api_call": self.deezer_api.get_chart_albums, "item_type": "album", "limit": 25, "card_type_field": None}, # limit changed to 25
@@ -339,7 +339,7 @@ class HomePage(QWidget):
         # However, to directly use the section_display_title, we need this map.
 
         temp_sections_to_load_for_lookup = [ # Duplicating for lookup logic, ideally refactor
-            {"title": "New Releases", "api_call": self.deezer_api.get_chart_albums, "item_type": "album"},
+            {"title": "New Releases", "api_call": self.deezer_api.get_editorial_releases, "item_type": "album"},
             {"title": "Popular Playlists", "api_call": self.deezer_api.get_chart_playlists, "item_type": "playlist"},
             {"title": "Most Streamed Artists", "api_call": self.deezer_api.get_chart_artists, "item_type": "artist"},
             {"title": "Top Albums", "api_call": self.deezer_api.get_chart_albums, "item_type": "album"},

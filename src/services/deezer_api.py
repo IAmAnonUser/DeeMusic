@@ -713,6 +713,67 @@ class DeezerAPI:
             logger.error(f"Unexpected error fetching chart albums: {e}")
             return None
 
+    async def get_editorial_releases(self, limit: int = 10) -> Optional[List[Dict]]:
+        """
+        Get the editorial new releases from Deezer.
+
+        Args:
+            limit (int): Number of releases to retrieve.
+
+        Returns:
+            Optional[List[Dict]]: A list of new release album details, or None on error.
+        """
+        session = await self._get_session()
+        if not session:
+            logger.error("Cannot get editorial releases: no session.")
+            return None
+
+        request_url = f"{self.PUBLIC_API_BASE}/editorial/0/releases?limit={limit}"
+        
+        try:
+            logger.info(f"Fetching editorial releases from: {request_url}")
+            async with session.get(request_url) as response:
+                if response.status != 200:
+                    logger.error(f"Failed to get editorial releases: HTTP {response.status} - {await response.text()}")
+                    return None
+                
+                data = await response.json()
+                if not data or 'data' not in data:
+                    logger.error(f"Invalid editorial releases response: 'data' field missing. Response: {data}")
+                    return None
+
+                releases_data = data.get('data', [])
+                
+                parsed_releases = []
+                for release_info in releases_data:
+                    # Ensure essential keys and nested artist object with name are present
+                    if not all(k in release_info for k in ['id', 'title', 'cover_medium', 'artist']) or \
+                       not isinstance(release_info.get('artist'), dict) or \
+                       'name' not in release_info.get('artist', {}):
+                        logger.warning(f"Skipping release due to missing keys or invalid artist structure: {release_info.get('title', 'N/A')}")
+                        continue
+                    
+                    parsed_releases.append({
+                        'id': release_info.get('id'),
+                        'title': release_info.get('title'),
+                        'artist_name': release_info['artist'].get('name'),
+                        'picture_url': release_info.get('cover_medium'), 
+                        'type': 'album'
+                    })
+                
+                logger.info(f"Successfully fetched and parsed {len(parsed_releases)} editorial releases.")
+                return parsed_releases
+
+        except aiohttp.ClientError as e:
+            logger.error(f"Network error fetching editorial releases: {e}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error for editorial releases: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error fetching editorial releases: {e}")
+            return None
+
     async def _get_track_info(self, track_id: str) -> Optional[Dict]:
         """Get additional track information including tokens.
         

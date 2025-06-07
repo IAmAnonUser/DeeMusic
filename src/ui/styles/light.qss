@@ -1,0 +1,454 @@
+/* Global font */
+* {
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
+}
+
+/* Main window styles - Light Theme */
+QMainWindow {
+    background-color: #F5F2F8;
+}
+
+/* Logo style (now in top bar) - Light Theme */
+#logo {
+    font-size: 22px;
+    font-weight: bold;
+    color: #6C2BD9;
+}
+
+/* General QPushButton style - Light Theme */
+QPushButton {
+    background-color: transparent;
+    border: none;
+    padding: 8px;
+    border-radius: 4px;
+    color: #333333;
+}
+
+QPushButton:hover {
+    background-color: #F5F2F8;
+}
+
+/* Search Bar (now in top bar) - Light Theme */
+#searchBar {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E5E5;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 13px;
+    min-height: 36px;
+    color: #333333;
+}
+
+#searchBar:focus {
+    border-color: #6C2BD9;
+    outline: none;
+}
+
+/* Settings button in top bar - Light Theme */
+QPushButton#TopSettingsButton {
+    background-color: transparent;
+    border: none;
+    padding: 4px;
+    border-radius: 18px;
+    color: #333333;
+}
+QPushButton#TopSettingsButton:hover {
+    background-color: #ECEAF0;
+}
+
+/* Search Filter Buttons - Light Theme */
+QPushButton#SearchFilterButton {
+    font-size: 13px;
+    font-weight: bold;
+    color: #333333;
+    background-color: transparent;
+    border: 1px solid transparent; 
+    padding: 7px 15px; 
+    border-radius: 16px; 
+    margin-right: 8px; 
+}
+
+QPushButton#SearchFilterButton:hover {
+    background-color: #ECEAF0; 
+    color: #333333;
+}
+
+QPushButton#SearchFilterButton:checked {
+    background-color: #6C2BD9; 
+    color: #FFFFFF; 
+    border-color: #6C2BD9; 
+}
+
+QPushButton#SearchFilterButton:checked:hover {
+    background-color: #5A23B6;
+    color: #FFFFFF;
+}
+
+QLabel#SearchSectionHeader {
+    font-size: 14px; 
+    font-weight: bold;
+    color: #333333;
+    padding-top: 15px;    
+    padding-bottom: 10px; 
+    padding-left: 0px; 
+}
+
+QPushButton#ViewAllButton {
+    font-size: 12px;
+    font-weight: normal; 
+    color: #555555;
+    background-color: transparent;
+    border: 1px solid #CCCCCC;
+    padding: 4px 10px; 
+    border-radius: 12px; 
+    margin-left: 8px; 
+}
+
+QPushButton#ViewAllButton:hover {
+    background-color: #EEEEEE;
+    color: #333333;
+    border-color: #BBBBBB;
+}
+
+/* Artist Detail Download Buttons - Light Theme */
+QPushButton#ArtistDownloadButton {
+    font-size: 12px;
+    font-weight: 600;
+    color: #FFFFFF;
+    background-color: #6C2BD9;
+    border: 1px solid #6C2BD9;
+    padding: 6px 12px;
+    border-radius: 14px;
+    margin: 2px 0;
+}
+
+QPushButton#ArtistDownloadButton:hover {
+    background-color: #5A23B6;
+    border-color: #5A23B6;
+    color: #FFFFFF;
+}
+
+QPushButton#ArtistDownloadButton:pressed {
+    background-color: #4A1B9A;
+    border-color: #4A1B9A;
+}
+
+/* Content area styles - Light Theme */
+#content {
+    background-color: #F5F2F8;
+    border: none;
+}
+
+/* Table styles - Light Theme */
+QTableWidget {
+    background-color: #FFFFFF;
+    border: none;
+    gridline-color: #E5E5E8;
+    color: #32323D;
+}
+
+QTableWidget::item {
+    padding: 8px;
+    border-bottom: 1px solid #E5E5E8;
+    color: #32323D;
+}
+
+QTableWidget::item:selected {
+    background-color: #F5F2F8;
+    color: #32323D;
+}
+
+QTableWidget::item:hover {
+    background-color: #ECEAF0;
+}
+
+QHeaderView::section {
+    background-color: #FFFFFF;
+    color: #666666;
+    padding: 8px;
+    border: none;
+    border-bottom: 1px solid #E5E5E8;
+    font-weight: bold;
+}
+
+/* ScrollBar styles - Light Theme */
+QScrollBar:vertical {
+    background-color: #F0F0F0;
+    width: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #C0C0C0;
+    border-radius: 6px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #A0A0A0;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+QScrollBar:horizontal {
+    background-color: #F0F0F0;
+    height: 12px;
+    border-radius: 6px;
+}
+
+QScrollBar::handle:horizontal {
+    background-color: #C0C0C0;
+    border-radius: 6px;
+    min-width: 20px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background-color: #A0A0A0;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0px;
+}
+
+/* Label styles - Light Theme */
+QLabel {
+    color: #333333;
+}
+
+/* Scroll Areas - Light Theme */
+QScrollArea {
+    background-color: #F5F2F8;
+    border: none;
+}
+
+QScrollArea > QWidget > QWidget {
+    background-color: #F5F2F8;
+}
+
+/* Frame styles - Light Theme */
+QFrame {
+    background-color: #FFFFFF;
+    border: none;
+}
+
+/* Widget styles - Light Theme */
+QWidget {
+    background-color: #F5F2F8;
+    color: #333333;
+}
+
+/* Input styles - Light Theme */
+QLineEdit {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E5E5;
+    border-radius: 4px;
+    padding: 6px;
+    color: #333333;
+}
+
+QLineEdit:focus {
+    border-color: #6C2BD9;
+}
+
+/* ComboBox styles - Light Theme */
+QComboBox {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E5E5;
+    border-radius: 4px;
+    padding: 6px;
+    color: #333333;
+}
+
+QComboBox:hover {
+    border-color: #CCCCCC;
+}
+
+QComboBox::drop-down {
+    border: none;
+    background-color: transparent;
+}
+
+QComboBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 4px solid #666666;
+    margin-right: 6px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E5E5;
+    color: #333333;
+    selection-background-color: #6C2BD9;
+}
+
+/* CheckBox styles - Light Theme */
+QCheckBox {
+    color: #333333;
+    spacing: 8px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border: 1px solid #CCCCCC;
+    border-radius: 3px;
+    background-color: #FFFFFF;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #6C2BD9;
+    border-color: #6C2BD9;
+}
+
+QCheckBox::indicator:checked:hover {
+    background-color: #5A23B6;
+}
+
+/* Toggle Switch styles - Light Theme */
+QCheckBox#ToggleSwitchNative {
+    spacing: 0px;
+}
+
+QCheckBox#ToggleSwitchNative::indicator {
+    width: 50px;
+    height: 26px;
+    border-radius: 13px;
+    background-color: #E0E0E0;
+    border: none;
+    background-image: url(none);
+    background-repeat: no-repeat;
+    background-position: left center;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:unchecked {
+    background-color: #E0E0E0;
+    background-image: radial-gradient(circle, #FFFFFF 8px, transparent 8px);
+    background-position: 4px center;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:checked {
+    background-color: #6C2BD9;
+    background-image: radial-gradient(circle, #FFFFFF 8px, transparent 8px);
+    background-position: 24px center;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:hover:unchecked {
+    background-color: #CCCCCC;
+}
+
+QCheckBox#ToggleSwitchNative::indicator:hover:checked {
+    background-color: #5A23B6;
+}
+
+/* Artist/Album/Playlist Detail Page Header Styles - Light Theme */
+#artist_page_type_label, #album_page_type_label, #playlist_page_type_label {
+    font-size: 10pt;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #4A4A4A;
+    padding-left: 2px;
+}
+
+#artist_page_name_label, #album_page_name_label, #playlist_page_name_label {
+    font-size: 24pt;
+    font-weight: bold;
+    color: #000000;
+    margin-bottom: 3px;
+}
+
+#artist_page_fan_count_label, #album_page_subtitle_label, #playlist_page_subtitle_label {
+    font-size: 11pt;
+    color: #2A2A2A;
+    margin-bottom: 3px;
+    padding-left: 2px;
+}
+
+#album_page_meta_label, #playlist_page_meta_label {
+    font-size: 9pt;
+    color: #2A2A2A;
+    padding-left: 2px;
+}
+
+#playlist_page_description_label {
+    font-size: 10pt;
+    color: #2A2A2A;
+    margin-top: 5px;
+    padding-left: 2px;
+}
+
+/* Artist Detail Page Tab Bar - Light Theme */
+QTabBar#artist_page_tab_bar::tab {
+    font-size: 13px;
+    font-weight: bold;
+    color: #333333;
+    background-color: transparent;
+    border: 1px solid transparent; 
+    padding: 7px 15px;
+    border-radius: 16px; 
+    margin-right: 8px;
+    min-width: 60px;
+}
+
+QTabBar#artist_page_tab_bar::tab:hover {
+    background-color: #ECEAF0; 
+    color: #333333;
+}
+
+QTabBar#artist_page_tab_bar::tab:selected {
+    background-color: #6C2BD9; 
+    color: #FFFFFF; 
+    border-color: #6C2BD9; 
+}
+
+QTabBar#artist_page_tab_bar::tab:selected:hover {
+    background-color: #5A23B6;
+    color: #FFFFFF;
+}
+
+QTabBar#artist_page_tab_bar {
+    qproperty-drawBase: 0; 
+    border: none;
+    padding-top: 10px; 
+    padding-bottom: 10px;
+    margin-left: 15px; 
+}
+
+/* Back button - Light Theme */
+#PageBackButton {
+    border: none;
+    background-color: transparent;
+    color: #333333;
+}
+
+#PageBackButton:hover {
+    background-color: #ECEAF0;
+    color: #333333;
+}
+
+/* Track List Headers - Light Theme */
+QLabel#TrackListHeaderLabel, QLabel#SearchTrackListHeaderLabel {
+    color: #333333;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+QWidget#TrackListHeader, QWidget#SearchTrackListHeader {
+    border-bottom: 1px solid #E0E0E0;
+    background-color: #FDFDFD;
+}
+
+/* Vertical Separator Line - Light Theme */
+QFrame#VerticalSeparatorLine {
+    border: none;
+    background-color: #DCDCDC;
+    max-width: 1px;
+    min-width: 1px;
+    margin: 5px 0px;
+}
+
+/* Download Queue specific styles will be loaded from download_queue.qss */ 
