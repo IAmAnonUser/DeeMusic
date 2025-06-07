@@ -46,6 +46,7 @@ def build_application():
         '--distpath=dist',
         '--workpath=build',
         '--specpath=build',
+        '--paths=src',  # Add src directory to Python path
         '--clean',
         
         # Hide imports to ensure they're included
@@ -71,6 +72,20 @@ def build_application():
         '--hidden-import=yarl',
         '--hidden-import=yt_dlp',
         
+        # Application-specific modules
+        '--hidden-import=ui.main_window',
+        '--hidden-import=ui.settings_dialog',
+        '--hidden-import=ui.artist_detail_page',
+        '--hidden-import=ui.search_widget',
+        '--hidden-import=ui.download_queue_widget',
+        '--hidden-import=ui.home_page',
+        '--hidden-import=ui.theme_manager',
+        '--hidden-import=config_manager',
+        '--hidden-import=services.deezer_api',
+        '--hidden-import=services.download_manager',
+        '--hidden-import=utils.image_cache',
+        '--hidden-import=models',
+        
         # Collect submodules
         '--collect-submodules=PyQt6',
         '--collect-submodules=qasync',
@@ -87,6 +102,7 @@ def build_application():
         '--exclude-module=IPython',
         
         # Add data files
+        f'--add-data={current_dir}/src;src',  # Include entire src directory
         f'--add-data={assets_path};src/ui/assets',
         f'--add-data={styles_path};src/ui/styles',
         
