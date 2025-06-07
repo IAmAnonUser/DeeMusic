@@ -2,8 +2,6 @@
 
 A modern, feature-rich desktop application for streaming, downloading, and managing music from Deezer with an intuitive PyQt6 GUI interface, comprehensive metadata management, and advanced download capabilities.
 
-![DeeMusic Interface](https://via.placeholder.com/800x400/1a1a1a/ffffff?text=DeeMusic+Interface)
-
 ## ✨ Features
 
 ### 🎯 Core Features
@@ -297,22 +295,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 This application is for educational purposes only. Users are responsible for complying with Deezer's Terms of Service and applicable copyright laws. The developers are not responsible for any misuse of this software.
 
-## 🙏 Acknowledgments
-
-- **Deezer** for their comprehensive music API
-- **Qt Project** for the excellent GUI framework
-- **Python Community** for the amazing ecosystem of libraries
-- **Contributors** who help improve this project
-
-## 📞 Support
-
-- **GitHub Issues**: [Report bugs or request features](https://github.com/IAmAnonUser/DeeMusic/issues)
-- **Documentation**: Check the `docs/` folder for detailed guides
-- **Community**: Join discussions in the Issues section
-
----
-
-<p align="center">
-  <strong>🎵 Made with ❤️ for music lovers everywhere 🎵</strong>
-</p>
 
