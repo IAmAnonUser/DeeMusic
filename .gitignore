@@ -66,6 +66,13 @@ debugging_progress.md
 *.docx
 DOWNLOAD_SYSTEM_DOCUMENTATION.md
 
+# Installer files
+installer_simple/
+installer_output/
+*.zip
+DeeMusic_Setup_*.exe
+DeeMusic_Installer_*.zip
+
 # OS generated files
 .DS_Store
 .DS_Store?
