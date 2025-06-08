@@ -22,9 +22,9 @@ def get_version():
     """Get version from config or default."""
     try:
         # Try to read version from a config file or use default
-        return "1.0.0"
+        return "1.0.1"
     except:
-        return "1.0.0"
+        return "1.0.1"
 
 def build_application():
     """Build the application executable."""

@@ -145,6 +145,15 @@ class ConfigManager:
                 'custom_path': '',
                 'sync_offset': 0,
                 'encoding': 'UTF-8'
+            },
+            'performance': {
+                'lazy_loading': True,
+                'image_preloading': True,
+                'memory_cache_size_mb': 30,
+                'disk_cache_size_mb': 100,
+                'max_concurrent_image_loads': 5,
+                'viewport_check_interval_ms': 200,
+                'preload_batch_size': 5
             }
         }
         

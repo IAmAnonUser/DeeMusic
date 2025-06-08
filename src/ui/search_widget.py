@@ -373,7 +373,7 @@ class SearchResultCard(QFrame):
         self.overlay_action_button = QPushButton(self.artwork_container)
         logger.debug(f"[SearchResultCard] Creating overlay action button for {self.item_type}: {self.item_data.get('title', self.item_data.get('name', 'Unknown'))}")
         self.overlay_action_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.overlay_action_button.setVisible(False)
+        self.overlay_action_button.setVisible(False)  # Hide download button by default, show on hover
         self.overlay_action_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.overlay_action_button.setFixedSize(40, 40) 
         
@@ -577,15 +577,15 @@ class SearchResultCard(QFrame):
                 return
 
             try:
-                # First check if the image is in the cache
+                # First check if the image is in the cache (optimized with memory cache)
                 try:
-                    cached_image = get_image_from_cache(self.url)
-                    if cached_image and not self._is_cancelled:
-                        pixmap = QPixmap.fromImage(cached_image)
-                        if not pixmap.isNull():
-                            if hasattr(self.loaded_signal, 'emit'):
-                                self.loaded_signal.emit(pixmap)
-                            return
+                    from utils.image_cache import get_pixmap_from_cache
+                    # Try to get pixmap directly from cache (includes memory cache)
+                    cached_pixmap = get_pixmap_from_cache(self.url)
+                    if cached_pixmap and not cached_pixmap.isNull() and not self._is_cancelled:
+                        if hasattr(self.loaded_signal, 'emit'):
+                            self.loaded_signal.emit(cached_pixmap)
+                        return
                 except Exception as cache_err:
                     logger.debug(f"[SearchResultCard._CardArtworkLoader] Cache check failed: {cache_err}")
                     # Continue to download if cache check fails
@@ -664,45 +664,119 @@ class SearchResultCard(QFrame):
             logger.warning(f"[SearchResultCard] Cannot load artwork: artwork_label is invalid/deleted")
             return
 
-        # Build list of URLs to try in order (higher quality first)
-        urls = []
-        
-        # Check for picture_url in item_data (album/artist cover)
-        if 'picture_url' in self.item_data and self.item_data['picture_url']:
-            urls.append(self.item_data['picture_url'])
-        
-        # Check for picture_xl, picture_big, picture_medium in top level
-        # Use highest quality first
-        for size in ['picture_xl', 'picture_big', 'picture_medium', 'picture']:
-            if size in self.item_data and self.item_data[size]:
-                urls.append(self.item_data[size])
-        
-        # Check for album cover URLs
-        if 'album' in self.item_data and isinstance(self.item_data['album'], dict):
-            for size in ['cover_xl', 'cover_big', 'cover_medium', 'cover_small', 'cover']:
-                if size in self.item_data['album'] and self.item_data['album'][size]:
-                    urls.append(self.item_data['album'][size])
-        
-        # For artist images
-        if 'artist' in self.item_data and isinstance(self.item_data['artist'], dict):
-            for size in ['picture_xl', 'picture_big', 'picture_medium', 'picture']:
-                if size in self.item_data['artist'] and self.item_data['artist'][size]:
-                    urls.append(self.item_data['artist'][size])
-        
-        # Remove duplicates while preserving order
-        unique_urls = []
-        for url in urls:
-            if url not in unique_urls:
-                unique_urls.append(url)
-        
-        if not unique_urls:
+        # Quick cache check for immediate performance
+        urls = self._get_artwork_urls()
+        if not urls:
             logger.warning(f"[SearchResultCard] No artwork URLs found for {self.item_data.get('title', self.item_data.get('name', 'Unknown item'))}")
             self._set_placeholder_artwork()
-            self._artwork_loaded = True  # Mark as loaded to prevent retries
+            self._artwork_loaded = True
             return
         
-        # Start loading the first URL
-        self._start_artwork_loader(unique_urls)
+        # Try immediate cache check (optimized path)
+        try:
+            from utils.image_cache import get_pixmap_from_cache
+            # Determine target size for optimization
+            target_size = self.artwork_label.size() if hasattr(self, 'artwork_label') else None
+            
+            # Try first URL from cache immediately
+            first_url = urls[0]
+            cached_pixmap = get_pixmap_from_cache(first_url, target_size)
+            if cached_pixmap and not cached_pixmap.isNull():
+                self.set_artwork(cached_pixmap)
+                return
+                
+        except Exception as e:
+            logger.debug(f"[SearchResultCard] Error with immediate cache check: {e}")
+        
+        # Continue with normal loading if not found in cache
+        self._start_artwork_loader(urls)
+    
+    def _get_artwork_urls(self):
+        """Extract ONE optimal artwork URL based on item type for best performance."""
+        # Size optimization: Use smaller images for all types for better performance
+        if self.item_type == 'track':
+            # For tracks, use small images (64x64) for fast loading
+            preferred_sizes = ['cover_small', 'picture_small', 'cover_medium', 'picture_medium', 'cover', 'picture']
+            max_fallback_size = 'cover_medium'  # Maximum fallback to keep it small
+        else:
+            # For albums/artists/playlists, use medium images (250x250) for good balance
+            preferred_sizes = ['cover_medium', 'picture_medium', 'cover_small', 'picture_small', 'cover_big', 'picture_big']
+            max_fallback_size = 'cover_big'  # Maximum fallback
+        
+        # Check for picture_url in item_data (usually reasonable size)
+        if 'picture_url' in self.item_data and self.item_data['picture_url']:
+            url = self.item_data['picture_url']
+            # For tracks, avoid larger images; for albums/playlists allow medium
+            if self.item_type == 'track':
+                # Skip picture_url for tracks if it looks too large
+                if '500x500' not in url and '1000x1000' not in url and 'big' not in url and 'xl' not in url:
+                    return [url]
+            else:
+                # For albums/playlists, allow medium and small sizes
+                if '1000x1000' not in url and 'xl' not in url:
+                    return [url]
+        
+        # Try to find ONE optimal size in top level data
+        for size in preferred_sizes:
+            if size in self.item_data and self.item_data[size]:
+                url = self.item_data[size]
+                # Check if size is reasonable for the item type
+                if self._is_reasonable_image_size(url):
+                    return [url]
+        
+        # Check for album cover URLs (for tracks)
+        if 'album' in self.item_data and isinstance(self.item_data['album'], dict):
+            for size in preferred_sizes:
+                if size in self.item_data['album'] and self.item_data['album'][size]:
+                    url = self.item_data['album'][size]
+                    if self._is_reasonable_image_size(url):
+                        return [url]
+        
+        # Check for artist images
+        if 'artist' in self.item_data and isinstance(self.item_data['artist'], dict):
+            for size in preferred_sizes:
+                if size in self.item_data['artist'] and self.item_data['artist'][size]:
+                    url = self.item_data['artist'][size]
+                    if self._is_reasonable_image_size(url):
+                        return [url]
+        
+        # Last resort: try any available size but prefer smaller ones
+        fallback_sources = [
+            (self.item_data, ['cover', 'picture']),
+            (self.item_data.get('album', {}), ['cover', 'picture']),
+            (self.item_data.get('artist', {}), ['picture', 'cover'])
+        ]
+        
+        for source, size_list in fallback_sources:
+            if isinstance(source, dict):
+                for size in size_list:
+                    if size in source and source[size]:
+                        url = source[size]
+                        if self._is_reasonable_image_size(url):
+                            return [url]
+        
+        return []  # No images found
+
+    def _is_reasonable_image_size(self, url):
+        """Check if an image URL represents a reasonable size for performance."""
+        if not url:
+            return False
+        
+        # Extract size from URL patterns like "1000x1000", "500x500", etc.
+        import re
+        size_match = re.search(r'(\d+)x(\d+)', url)
+        if size_match:
+            width, height = int(size_match.group(1)), int(size_match.group(2))
+            
+            if self.item_type == 'track':
+                # For tracks, prefer very small images (up to 120x120) for fast loading
+                return width <= 120 and height <= 120
+            else:
+                # For albums/artists/playlists, prefer medium images (up to 400x400)
+                return width <= 400 and height <= 400
+        
+        # If we can't parse size from URL, allow it (assume it's reasonable)
+        return True
 
     def _start_artwork_loader(self, urls):
         """
@@ -926,28 +1000,17 @@ class SearchResultCard(QFrame):
         super().mousePressEvent(event)
 
     def showEvent(self, event):
-        """Called when the widget becomes visible."""
+        """Handle when the card becomes visible - load artwork with smart staggering."""
         super().showEvent(event)
-        self._is_visible = True
-        self._check_and_load_artwork()
-    
-    def hideEvent(self, event):
-        """Called when the widget becomes hidden."""
-        super().hideEvent(event)
-        self._is_visible = False
-        # Cancel artwork loading if it's in progress and widget is hidden
-        self.cancel_artwork_load()
-    
-    def _check_and_load_artwork(self):
-        """Check if artwork should be loaded and load it if needed."""
-        if self._is_visible and not self._artwork_loaded and not self._current_artwork_loader:
-            # Add a small delay to avoid loading during rapid scrolling
-            QTimer.singleShot(100, self._delayed_artwork_load)
-    
-    def _delayed_artwork_load(self):
-        """Load artwork after a delay, only if still visible."""
-        if self._is_visible and not self._artwork_loaded and not self._current_artwork_loader:
-            self.load_artwork()
+        if not self._artwork_loaded:
+            # Add a small staggered delay to prevent all cards from loading images simultaneously
+            # This is especially important when switching tabs in artist detail page
+            import random
+            base_delay = 500  # Base delay in milliseconds
+            stagger_delay = random.randint(0, 1000)  # Random stagger up to 1 second
+            total_delay = base_delay + stagger_delay
+            
+            QTimer.singleShot(total_delay, self.load_artwork)
 
 class SearchWidget(QWidget):
     """Widget for searching and displaying results."""
@@ -1040,13 +1103,17 @@ class SearchWidget(QWidget):
         self.results_layout = QVBoxLayout(self.results_widget)
         self.results_area.setWidget(self.results_widget)
         
+        # Removed complex scroll event handling that was causing blocking
+        
         # Add to main layout
         layout.addWidget(header_panel_widget) # ADDED: new header panel
         # layout.addWidget(self.filter_buttons_panel) # REMOVED: Now part of header_panel_widget
         layout.addWidget(self.results_area, stretch=1)
         
         self.set_back_button_visibility(False) # Initially hidden
-        
+    
+    # Removed complex scroll event handling that was causing blocking behavior
+    
     def set_back_button_visibility(self, visible: bool):
         """Sets the visibility of the back button."""
         if hasattr(self, 'back_button'):
@@ -1971,9 +2038,9 @@ class SearchWidget(QWidget):
             if on_download_click:
                 card.download_clicked.connect(on_download_click)
             
-            # Load artwork with higher quality settings
-            # Force immediate artwork loading
-            card.load_artwork()
+            # DON'T force immediate artwork loading - let it load asynchronously
+            # This prevents UI blocking and allows download buttons/hover effects to work immediately
+            # card.load_artwork()  # REMOVED - artwork will load when card becomes visible
             
             return card
         except Exception as e:

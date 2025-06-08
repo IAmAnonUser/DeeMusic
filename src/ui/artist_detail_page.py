@@ -21,7 +21,7 @@ from utils.image_cache import get_image_from_cache, save_image_to_cache
 
 from src.ui.search_widget import SearchResultCard # Added import
 from src.ui.track_list_header_widget import TrackListHeaderWidget # ADDED
-from ui.components.responsive_grid import ResponsiveGridWidget
+from ui.components.responsive_grid import ResponsiveGridWidget, ResponsiveScrollArea
 from src.ui.flowlayout import FlowLayout # Use our custom FlowLayout
 
 logger = logging.getLogger(__name__)
@@ -231,6 +231,8 @@ class ArtistDetailPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         
+        # Removed complex scroll event handling that was causing performance issues
+        
         # Content widget to hold the track list
         content = QWidget()
         content.setObjectName("top_tracks_content")
@@ -316,16 +318,9 @@ class ArtistDetailPage(QWidget):
                 'eps': False,
                 'featured_in': False
             }
-            # Clear any previous content when switching artists
-            self._clear_all_tabs()
         
         self.current_artist_id = artist_id
-        
-        # Update UI to show loading
-        self.artist_name_label.setText("Loading...")
-        self.artist_type_label.setText("ARTIST")
-        self.fan_count_label.setText("Loading...")
-        self._set_artist_image_placeholder()
+        # Loading state is already set by set_loading_state() for immediate UI response
         
         # Ensure tab content widgets are initialized before loading data
         if not hasattr(self, 'top_tracks_list_layout') or self._safe_sip_is_deleted(self.top_tracks_list_layout):
@@ -1288,6 +1283,15 @@ class ArtistDetailPage(QWidget):
     def _emit_back_request(self): # ADDED
         self.back_requested.emit()
 
+    def set_loading_state(self):
+        """Set the page to show a loading state immediately for responsive navigation."""
+        self.artist_name_label.setText("Loading...")
+        self.artist_type_label.setText("ARTIST")
+        self.fan_count_label.setText("Loading...")
+        self._set_artist_image_placeholder()
+        # Clear any previous content when switching artists
+        self._clear_all_tabs()
+
     def _clear_layout(self, layout):
         """Clear all items from a layout with better error handling.
         Works with both QLayout and FlowLayout."""
@@ -1336,9 +1340,9 @@ class ArtistDetailPage(QWidget):
         albums_page_layout = QVBoxLayout(self.albums_page)
         albums_page_layout.setContentsMargins(0,0,0,0)
         albums_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        albums_scroll_area = QScrollArea()
-        albums_scroll_area.setWidgetResizable(True)
+        albums_scroll_area = ResponsiveScrollArea()
         albums_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # Removed complex scroll event handling
         self.albums_content_widget = QWidget()
         self.albums_content_widget.setMinimumWidth(800)  # Set a minimum width to ensure content is visible
         # IMPORTANT: Store references as class variables to prevent garbage collection
@@ -1370,9 +1374,9 @@ class ArtistDetailPage(QWidget):
         singles_page_layout = QVBoxLayout(self.singles_page)
         singles_page_layout.setContentsMargins(0,0,0,0)
         singles_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        singles_scroll_area = QScrollArea()
-        singles_scroll_area.setWidgetResizable(True)
+        singles_scroll_area = ResponsiveScrollArea()
         singles_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # Removed complex scroll event handling
         self.singles_content_widget = QWidget()
         self.singles_content_widget.setMinimumWidth(800)  # Set a minimum width to ensure content is visible
         # IMPORTANT: Store references as class variables to prevent garbage collection
@@ -1404,9 +1408,9 @@ class ArtistDetailPage(QWidget):
         eps_page_layout = QVBoxLayout(self.eps_page)
         eps_page_layout.setContentsMargins(0,0,0,0)
         eps_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        eps_scroll_area = QScrollArea()
-        eps_scroll_area.setWidgetResizable(True)
+        eps_scroll_area = ResponsiveScrollArea()
         eps_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # Removed complex scroll event handling
         self.eps_content_widget = QWidget()
         self.eps_content_widget.setMinimumWidth(800)  # Set a minimum width to ensure content is visible
         # IMPORTANT: Store references as class variables to prevent garbage collection
@@ -1438,9 +1442,9 @@ class ArtistDetailPage(QWidget):
         featured_in_page_layout = QVBoxLayout(self.featured_in_page)
         featured_in_page_layout.setContentsMargins(0,0,0,0)
         featured_in_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        featured_in_scroll_area = QScrollArea()
-        featured_in_scroll_area.setWidgetResizable(True)
+        featured_in_scroll_area = ResponsiveScrollArea()
         featured_in_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        # Removed complex scroll event handling
         self.featured_in_content_widget = QWidget()
         self.featured_in_content_widget.setMinimumWidth(800)  # Set a minimum width to ensure content is visible
         # IMPORTANT: Store references as class variables to prevent garbage collection
@@ -1538,9 +1542,11 @@ class ArtistDetailPage(QWidget):
             if on_download_click and hasattr(card, 'download_clicked'):
                 card.download_clicked.connect(on_download_click)
             
-            # Manually trigger artwork loading
-            if hasattr(card, 'load_artwork'):
-                QTimer.singleShot(100, card.load_artwork)
+            # DON'T force immediate artwork loading - let it load asynchronously when visible
+            # This prevents UI blocking and allows download buttons/hover effects to work immediately  
+            # Cards will load their artwork when they become visible in the viewport
+            # if hasattr(card, 'load_artwork'):
+            #     QTimer.singleShot(100, card.load_artwork)
             
             return card
         except Exception as e:
@@ -1793,6 +1799,8 @@ class ArtistDetailPage(QWidget):
                     
         except Exception as e:
             logger.error(f"[ArtistDetail] Error in _download_all_eps: {e}", exc_info=True)
+
+    # Removed complex scroll event handling that was causing performance issues
 
 # Example for standalone testing (requires qasync or similar for asyncio with Qt)
 if __name__ == '__main__':

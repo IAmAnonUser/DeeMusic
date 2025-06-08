@@ -641,7 +641,13 @@ class MainWindow(QMainWindow):
         if not self.playlist_detail_page.deezer_api and self.deezer_api:
             self.playlist_detail_page.deezer_api = self.deezer_api
 
-        # Schedule the async method call
+        # IMMEDIATE NAVIGATION: Switch to playlist detail page first for responsive UI
+        self._switch_to_view(self.content_stack.indexOf(self.playlist_detail_page))
+        
+        # Show loading state immediately
+        self.playlist_detail_page.set_loading_state()
+
+        # Schedule the async method call after navigation
         if hasattr(self, 'current_playlist_load_task') and self.current_playlist_load_task and not self.current_playlist_load_task.done():
             logger.debug(f"Cancelling previous playlist load task: {self.current_playlist_load_task}")
             self.current_playlist_load_task.cancel()
@@ -651,13 +657,17 @@ class MainWindow(QMainWindow):
             self.playlist_detail_page.load_playlist_details(playlist_id)
         )
 
-        self._switch_to_view(self.content_stack.indexOf(self.playlist_detail_page))
-
     def show_album_detail(self, album_id: int):
         logger.info(f"Attempting to show album detail for ID: {album_id}")
         target_index = self.content_stack.indexOf(self.album_detail_page)
         if target_index != -1:
+            # IMMEDIATE NAVIGATION: Switch to album detail page first for responsive UI
             self._switch_to_view(target_index) # USE HELPER
+            
+            # Show loading state immediately
+            self.album_detail_page.set_loading_state()
+            
+            # Schedule async loading after navigation
             if self.current_album_load_task and not self.current_album_load_task.done():
                 self.current_album_load_task.cancel()
             self.current_album_load_task = asyncio.create_task(
@@ -689,7 +699,13 @@ class MainWindow(QMainWindow):
 
         # Signals are already connected in connect_signals() method - no need to connect here
 
-        # Schedule the async method call
+        # IMMEDIATE NAVIGATION: Switch to artist detail page first for responsive UI
+        self._switch_to_view(self.content_stack.indexOf(self.artist_detail_page))
+        
+        # Show loading state immediately
+        self.artist_detail_page.set_loading_state()
+
+        # Schedule the async method call after navigation
         if self.current_artist_load_task and not self.current_artist_load_task.done():
             logger.debug(f"Cancelling previous artist load task: {self.current_artist_load_task}")
             self.current_artist_load_task.cancel()
@@ -700,9 +716,6 @@ class MainWindow(QMainWindow):
         )
         # Add a callback to log task completion/errors for debugging
         self.current_artist_load_task.add_done_callback(self._handle_async_task_completion)
-
-        self._switch_to_view(self.content_stack.indexOf(self.artist_detail_page))
-        # _update_back_button_visibility is called by _switch_to_view
 
     def _handle_home_page_item_navigation(self, item_data: dict, item_type: str):
         """Handles navigation when an item is selected from the HomePage."""

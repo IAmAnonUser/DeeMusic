@@ -204,6 +204,16 @@ class AlbumDetailPage(QWidget):
     def _emit_back_request(self): # ADDED
         self.back_requested.emit()
 
+    def set_loading_state(self):
+        """Set the page to show a loading state immediately for responsive navigation."""
+        self.album_title_label.setText("Loading album...")
+        self.album_artist_label.setText("")
+        self.album_stats_label.setText("")
+        self.album_type_label.setText("ALBUM") # Set default type
+        self._set_placeholder_main_album_cover()
+        self._clear_track_list()
+        self.album_download_button.setVisible(False)
+
     async def load_album(self, album_id: int):
         logger.info(f"[AlbumDetail] Attempting to load album with ID: {album_id}")
         if not self.deezer_api:
@@ -225,13 +235,7 @@ class AlbumDetailPage(QWidget):
             return
 
         self.current_album_id = album_id
-        self.album_title_label.setText("Loading album...")
-        self.album_artist_label.setText("")
-        self.album_stats_label.setText("")
-        self.album_type_label.setText("ALBUM") # Set default type
-        self._set_placeholder_main_album_cover()
-        self._clear_track_list()
-        self.album_download_button.setVisible(False)
+        # Loading state is already set by set_loading_state() for immediate UI response
 
         try:
             album_details = await self.deezer_api.get_album_details(album_id)

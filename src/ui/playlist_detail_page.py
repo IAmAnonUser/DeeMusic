@@ -184,6 +184,17 @@ class PlaylistDetailPage(QWidget):
     def _emit_back_request(self):
         self.back_requested.emit()
 
+    def set_loading_state(self):
+        """Set the page to show a loading state immediately for responsive navigation."""
+        self.playlist_title_label.setText("Loading playlist...")
+        self.playlist_creator_label.setText("")
+        self.playlist_description_label.setText("")
+        self.playlist_description_label.setVisible(False)
+        self.playlist_stats_label.setText("")
+        self._set_placeholder_main_playlist_cover()
+        self._clear_track_list()
+        self.playlist_download_button.setVisible(False)
+
     def eventFilter(self, source, event):
         """Handle hover events for playlist cover to show/hide download button."""
         if source is self.playlist_cover_container:
@@ -258,14 +269,7 @@ class PlaylistDetailPage(QWidget):
             return
 
         self.current_playlist_id = playlist_id
-        self.playlist_title_label.setText("Loading playlist...")
-        self.playlist_creator_label.setText("")
-        self.playlist_description_label.setText("")
-        self.playlist_description_label.setVisible(False)
-        self.playlist_stats_label.setText("")
-        self._set_placeholder_main_playlist_cover()
-        self._clear_track_list()
-        self.playlist_download_button.setVisible(False)
+        # Loading state is already set by set_loading_state() for immediate UI response
 
         try:
             playlist_details = await self.deezer_api.get_playlist_details(playlist_id)
@@ -329,9 +333,9 @@ class PlaylistDetailPage(QWidget):
                     card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
                     self.tracks_layout.addWidget(card)
                     
-                    # Only load artwork for first 5 tracks initially to improve performance
-                    if i < 5:
-                        card.load_artwork()
+                    # DON'T force immediate artwork loading - let cards load when they become visible
+                    # This prevents UI blocking and ensures smooth page navigation
+                    # Cards will automatically load artwork via their showEvent with 1000ms delay
             else:
                 logger.info(f"[PlaylistDetail] No tracks found in initial details for playlist {playlist_id}.")
                 self._show_track_load_error("No tracks found in this playlist.")
