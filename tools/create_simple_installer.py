@@ -53,12 +53,12 @@ def create_simple_installer():
     installer_script = installer_dir / "install.bat"
     with open(installer_script, 'w', encoding='utf-8') as f:
         f.write(f'''@echo off
-title DeeMusic Installer v1.0.0
+title DeeMusic Installer v1.0.2
 color 0A
 echo.
 echo     ╔══════════════════════════════════════════╗
 echo     ║              DeeMusic Installer          ║
-echo     ║         Version 1.0.0                    ║
+echo     ║         Version 1.0.2                    ║
 echo     ╚══════════════════════════════════════════╝
 echo.
 echo Welcome to DeeMusic - Modern Music Streaming and Downloading
