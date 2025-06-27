@@ -9,7 +9,7 @@ A modern desktop application for downloading and managing music with an intuitiv
 - 🎵 **High-Quality Downloads**: Support for MP3 (320kbps) and FLAC formats
 - 🎨 **Modern Interface**: Beautiful dark/light theme with responsive design
 - 🔍 **Smart Search**: Find tracks, albums, artists, and playlists instantly
-- 🎧 **Spotify Playlist Conversion**: Convert Spotify playlists to Deezer with automatic track matching
+- 🎧 **Sp*tify Playlist Conversion**: Convert Spotify playlists to Deezer with automatic track matching
 - 📊 **Music Discovery**: Browse charts and recommendations
 - 📁 **Smart Organization**: Customizable folder structures and file naming
 - 🖼️ **Artwork Management**: High-resolution album covers automatically embedded
