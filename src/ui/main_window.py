@@ -296,7 +296,7 @@ class MainWindow(QMainWindow):
 
         # Initialize pages here, but pass deezer_api during initialize_services
         self.home_page = HomePage(deezer_api=None, download_manager=None, parent=self) # API/DM set later
-        self.search_widget_page = SearchWidget(deezer_api=None, download_manager=self.download_manager, parent=self)
+        self.search_widget_page = SearchWidget(deezer_api=None, download_manager=self.download_manager, config_manager=self.config, parent=self)
         
         # Detail Pages (API and DM passed later or on creation if safe)
         self.playlist_detail_page = PlaylistDetailPage(deezer_api=None, download_manager=self.download_manager, parent=self)
@@ -354,6 +354,14 @@ class MainWindow(QMainWindow):
             # Update toggle state if theme was changed through settings
             current_theme = self.config.get_setting('appearance.theme', 'light')
             self.theme_toggle_switch.setOn(current_theme == 'dark')
+        
+        # Apply Spotify settings changes
+        if any(change.startswith('spotify.') for change in changes.keys()):
+            if hasattr(self, 'search_widget_page') and self.search_widget_page:
+                logger.info("Reinitializing Spotify client due to credential changes")
+                self.search_widget_page.reinitialize_spotify_client()
+            else:
+                logger.warning("Cannot reinitialize Spotify client - search widget not available")
         
         # Apply download manager settings changes
         download_related_changes = [
@@ -436,7 +444,7 @@ class MainWindow(QMainWindow):
         # Search Bar (moved to top bar)
         self.search_bar = QLineEdit()
         self.search_bar.setObjectName("searchBar") # For QSS styling
-        self.search_bar.setPlaceholderText("Artists, Albums, Tracks, Playlists...")
+        self.search_bar.setPlaceholderText("Artists, Albums, Tracks, Playlists, Spotify Playlist URL...")
         self.search_bar.returnPressed.connect(self._handle_header_search)
         # self.search_bar.setMaximumWidth(400) # Make search bar smaller - REMOVED
         self.search_bar.setMinimumWidth(500) # MODIFIED to make it wider and allow expansion

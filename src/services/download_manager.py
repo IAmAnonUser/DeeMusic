@@ -78,6 +78,73 @@ class DownloadWorker(QRunnable):
         import traceback
         logger.info(f"[DownloadWorker:{self.item_id_str}] Stop call stack: {traceback.format_stack()}")
         self._is_stopping = True
+    
+    def _get_album_artist(self, track_info: dict, track_artist: str) -> str:
+        """Get album artist based on user configuration and track data.
+        
+        Args:
+            track_info (dict): Track information from Deezer API
+            track_artist (str): The track artist name
+            
+        Returns:
+            str: The album artist to use for metadata
+        """
+        # Get user preference for album artist strategy
+        strategy = self.download_manager.config.get_setting('metadata.album_artist_strategy', 'album_artist_from_api')
+        
+        album_artist_from_api = track_info.get('album', {}).get('artist', {}).get('name')
+        
+        # If no album artist found in the obvious place, try to extract from other fields
+        if not album_artist_from_api:
+            logger.debug(f"No album artist found in album.artist, attempting enhanced detection...")
+            
+            # Check album title for compilation indicators
+            album_title = track_info.get('alb_title', track_info.get('album', {}).get('title', ''))
+            compilation_indicators = ['various artists', 'compilation', 'soundtrack', 'best of', 'greatest hits']
+            is_compilation = any(indicator in album_title.lower() for indicator in compilation_indicators)
+            
+            if is_compilation:
+                album_artist_from_api = "Various Artists"
+                logger.debug(f"Detected compilation album '{album_title}', using 'Various Artists' as album artist")
+            else:
+                # Check if this is a collaborative track with multiple artists
+                artists_array = track_info.get('artists', [])
+                if artists_array and len(artists_array) > 1:
+                    # For collaborative tracks, use the primary artist (first in array) as album artist
+                    primary_artist = artists_array[0]
+                    if isinstance(primary_artist, dict) and 'ART_NAME' in primary_artist:
+                        album_artist_from_api = primary_artist['ART_NAME']
+                        logger.debug(f"Collaborative track detected with {len(artists_array)} artists, using primary artist '{album_artist_from_api}' as album artist")
+                
+                # Try to get from main artist field (art_name) if still not found
+                if not album_artist_from_api:
+                    art_name = track_info.get('art_name')
+                    if art_name:
+                        album_artist_from_api = art_name
+                        logger.debug(f"Using art_name as album artist: {album_artist_from_api}")
+        else:
+            logger.debug(f"Found album artist in API data: {album_artist_from_api}")
+        
+        if strategy == 'track_artist':
+            # Always use track artist as album artist
+            logger.debug(f"Strategy 'track_artist': returning track artist '{track_artist}' as album artist")
+            return track_artist
+        elif strategy == 'compilation_aware':
+            # Use album artist only for compilations, otherwise use track artist
+            if album_artist_from_api and album_artist_from_api.lower() in ['various artists', 'various', 'compilation']:
+                logger.debug(f"Strategy 'compilation_aware': detected compilation, returning '{album_artist_from_api}' as album artist")
+                return album_artist_from_api  # Keep "Various Artists" for compilations
+            else:
+                logger.debug(f"Strategy 'compilation_aware': not a compilation, returning track artist '{track_artist}' as album artist")
+                return track_artist  # Use track artist for regular albums
+        else:  # 'album_artist_from_api' (default and recommended)
+            # Use actual album artist from API when available
+            if album_artist_from_api:
+                logger.debug(f"Strategy 'album_artist_from_api': found album artist, returning '{album_artist_from_api}' (track artist: '{track_artist}')")
+                return album_artist_from_api  # Use actual album artist from API
+            else:
+                logger.debug(f"Strategy 'album_artist_from_api': no album artist found, falling back to track artist '{track_artist}'")
+                return track_artist  # Fallback to track artist only if no album artist available
 
     def run(self):
         """Execute the download task."""
@@ -364,18 +431,36 @@ class DownloadWorker(QRunnable):
             # Prepare placeholder values from track_info
             disc_number_val = track_info.get('disk_number', 1)
             track_number_val = str(track_info.get('track_position', track_info.get('track_number', 0))).zfill(2)
-            artist_val = track_info.get('artist', {}).get('name', 'Unknown Artist')
+            
+            # Construct track artist name (with collaboration if multiple artists)
+            primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
+            artists_array = track_info.get('artists', [])
+            
+            if len(artists_array) > 1:
+                # Multiple artists - build collaborative name
+                all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
+                if len(all_artist_names) > 1:
+                    # Use primary artist + "feat." + other artists
+                    other_artists = all_artist_names[1:]  # Skip first (primary) artist
+                    if len(other_artists) == 1:
+                        artist_val = f"{all_artist_names[0]} feat. {other_artists[0]}"
+                    else:
+                        artist_val = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
+                    logger.debug(f"ARTIST DEBUG: Constructed collaborative artist name: '{artist_val}' from {all_artist_names}")
+                else:
+                    artist_val = primary_artist
+                    logger.debug(f"ARTIST DEBUG: Using primary artist (insufficient artist data): '{artist_val}'")
+            else:
+                # Single artist
+                artist_val = primary_artist
+                logger.debug(f"ARTIST DEBUG: Using single artist: '{artist_val}'")
+            
             album_val = track_info.get('album', {}).get('title', track_info.get('alb_title', 'Unknown Album'))
             title_val = track_info.get('title', 'Unknown Title')
             year_val = str(track_info.get('release_date', '0000'))[:4]
             
-            # Fixed: Use track artist as album artist unless it's a compilation album
-            # Same logic as in metadata section for consistency
-            album_artist_from_api = track_info.get('album', {}).get('artist', {}).get('name', artist_val)
-            if album_artist_from_api and album_artist_from_api.lower() in ['various artists', 'various', 'compilation']:
-                album_artist_val = album_artist_from_api  # Keep "Various Artists" for compilations
-            else:
-                album_artist_val = artist_val  # Use track artist as album artist for consistency
+            # Album Artist logic based on user configuration (uses primary artist)
+            album_artist_val = self._get_album_artist(track_info, primary_artist)
             
             track_num_str = str(track_info.get('track_number', track_info.get('track_position', 0))).zfill(2)
             total_tracks_str = str(track_info.get('album', {}).get('nb_tracks', 0))
@@ -391,10 +476,12 @@ class DownloadWorker(QRunnable):
             isrc = track_info.get('isrc', None)
             
             # Debug metadata extraction
-            logger.debug(f"METADATA DEBUG: Extracted artist='{artist_val}', album_artist='{album_artist_val}', title='{title_val}', album='{album_val}'")
+            logger.debug(f"METADATA DEBUG: Extracted track_artist='{artist_val}', album_artist='{album_artist_val}', title='{title_val}', album='{album_val}'")
+            logger.debug(f"METADATA DEBUG: Primary artist: '{primary_artist}', Full track artist: '{artist_val}'")
             logger.debug(f"METADATA DEBUG: track_info artist structure: {track_info.get('artist')}")
             logger.debug(f"METADATA DEBUG: track_info album.artist structure: {track_info.get('album', {}).get('artist')}")
-            logger.debug(f"METADATA DEBUG: album_artist_from_api='{album_artist_from_api}', using album_artist='{album_artist_val}'")
+            logger.debug(f"METADATA DEBUG: track_info artists array: {[a.get('ART_NAME') for a in track_info.get('artists', [])]}")
+            logger.debug(f"METADATA DEBUG: Album artist logic result: '{album_artist_val}' (same as track artist: {album_artist_val == artist_val})")
             
             # Get total number of discs for the album
             # Common Deezer API key for this is 'nb_disk' in the album object
@@ -444,6 +531,7 @@ class DownloadWorker(QRunnable):
                 'disc_number': disc_num_int,    # Use integer
                 'year': year_val,
                 'album_artist': album_artist_val,
+                'albumartist': album_artist_val,  # Alias for album_artist (for %albumartist% templates)
                 'playlist_name': self.playlist_title if self.playlist_title else '', # Add playlist_name
                 'playlist': self.playlist_title if self.playlist_title else '', # Add playlist (for %playlist% templates)
                 # Add other potential placeholders if needed, e.g., genre
@@ -637,7 +725,9 @@ class DownloadWorker(QRunnable):
             if self._is_stopping: return None
             
             try:
-                self._apply_metadata(str(decrypted_path), track_info)
+                # Pass the correct directory path to metadata method for artwork saving
+                final_dir_path = base_download_dir.joinpath(*sanitized_dir_parts)
+                self._apply_metadata(str(decrypted_path), track_info, final_dir_path)
                 logger.info(f"[DownloadWorker:{self.item_id_str}] Metadata applied successfully")
             except Exception as metadata_exc:
                 logger.error(f"[DownloadWorker:{self.item_id_str}] Metadata application failed: {metadata_exc}")
@@ -686,7 +776,7 @@ class DownloadWorker(QRunnable):
             except:
                 pass
 
-    def _apply_metadata(self, file_path: str, track_info: dict):
+    def _apply_metadata(self, file_path: str, track_info: dict, target_directory: Path = None):
         """Apply metadata to the downloaded audio file."""
         try:
             # Import mutagen here to avoid potential loading issues elsewhere
@@ -725,7 +815,30 @@ class DownloadWorker(QRunnable):
             # --- Map track_info to tags --- 
             # Use .get() with fallbacks to avoid KeyErrors
             title = track_info.get('title', 'Unknown Title')
-            artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
+            
+            # Construct track artist name (with collaboration if multiple artists) - same logic as in path preparation
+            primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
+            artists_array = track_info.get('artists', [])
+            
+            if len(artists_array) > 1:
+                # Multiple artists - build collaborative name
+                all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
+                if len(all_artist_names) > 1:
+                    # Use primary artist + "feat." + other artists
+                    other_artists = all_artist_names[1:]  # Skip first (primary) artist
+                    if len(other_artists) == 1:
+                        artist = f"{all_artist_names[0]} feat. {other_artists[0]}"
+                    else:
+                        artist = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
+                    logger.debug(f"METADATA ARTIST DEBUG: Constructed collaborative artist name: '{artist}' from {all_artist_names}")
+                else:
+                    artist = primary_artist
+                    logger.debug(f"METADATA ARTIST DEBUG: Using primary artist (insufficient artist data): '{artist}'")
+            else:
+                # Single artist
+                artist = primary_artist
+                logger.debug(f"METADATA ARTIST DEBUG: Using single artist: '{artist}'")
+            
             # --- Check for alb_title first for metadata too --- 
             album = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
             
@@ -754,13 +867,8 @@ class DownloadWorker(QRunnable):
             publisher = track_info.get('label', track_info.get('record_label')) # Check alternative keys
             isrc = track_info.get('isrc', None)
             
-            # Fixed: Use track artist as album artist unless it's a compilation album
-            # Same logic as in filename section for consistency
-            album_artist_from_api = track_info.get('album', {}).get('artist', {}).get('name', artist)
-            if album_artist_from_api and album_artist_from_api.lower() in ['various artists', 'various', 'compilation']:
-                album_artist = album_artist_from_api  # Keep "Various Artists" for compilations
-            else:
-                album_artist = artist  # Use track artist as album artist for consistency
+            # Album Artist logic based on user configuration (uses primary artist)
+            album_artist = self._get_album_artist(track_info, primary_artist)
 
             # --- Apply tags ---
             if is_mp3:
@@ -959,31 +1067,43 @@ class DownloadWorker(QRunnable):
                             album_cover_url = f"https://e-cdns-images.dzcdn.net/images/cover/{cover_md5}/{size_str}-000000-80-0-0.jpg"
                     
                     if album_cover_url:
-                        # Determine album directory from the temporary file path
-                        # Get folder structure settings
-                        folder_conf = config.get_setting('downloads.folder_structure', {})
-                        create_artist_folder = folder_conf.get('create_artist_folders', True)
-                        create_album_folder = folder_conf.get('create_album_folders', True)
-                        
-                        # Get base download directory
-                        download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
-                        
-                        # Build the directory structure based on settings
-                        album_dir = Path(download_base)
-                        
-                        if create_artist_folder:
-                            # Get artist name from track_info
-                            artist_name = track_info.get('artist', {}).get('name', 'Unknown Artist')
-                            # Sanitize artist name for filesystem
-                            safe_artist = self.download_manager._sanitize_filename(artist_name)
-                            album_dir = album_dir / safe_artist
+                        # Use the provided target directory instead of recalculating
+                        if target_directory:
+                            album_dir = target_directory
+                        else:
+                            # Fallback: recalculate directory structure (shouldn't happen normally)
+                            folder_conf = config.get_setting('downloads.folder_structure', {})
+                            create_artist_folder = folder_conf.get('create_artist_folders', True)
+                            create_album_folder = folder_conf.get('create_album_folders', True)
                             
-                        if create_album_folder:
-                            # Get album name from track_info  
-                            album_name = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
-                            # Sanitize album name for filesystem
-                            safe_album = self.download_manager._sanitize_filename(album_name)
-                            album_dir = album_dir / safe_album
+                            download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
+                            album_dir = Path(download_base)
+                            
+                            if create_artist_folder:
+                                # Construct track artist name (with collaboration if multiple artists)
+                                primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
+                                artists_array = track_info.get('artists', [])
+                                
+                                if len(artists_array) > 1:
+                                    all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
+                                    if len(all_artist_names) > 1:
+                                        other_artists = all_artist_names[1:]
+                                        if len(other_artists) == 1:
+                                            artist_name = f"{all_artist_names[0]} feat. {other_artists[0]}"
+                                        else:
+                                            artist_name = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
+                                    else:
+                                        artist_name = primary_artist
+                                else:
+                                    artist_name = primary_artist
+                                
+                                safe_artist = self.download_manager._sanitize_filename(artist_name)
+                                album_dir = album_dir / safe_artist
+                                
+                            if create_album_folder:
+                                album_name = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
+                                safe_album = self.download_manager._sanitize_filename(album_name)
+                                album_dir = album_dir / safe_album
                         
                         album_cover_filename = f"{album_image_template}.{album_image_format}"
                         album_cover_path = album_dir / album_cover_filename
@@ -1027,25 +1147,54 @@ class DownloadWorker(QRunnable):
                             artist_image_url = f"https://e-cdns-images.dzcdn.net/images/artist/{artist_md5}/{size_str}-000000-80-0-0.jpg"
                     
                     if artist_image_url:
-                        # Determine artist directory using the same logic as album directory
-                        # Get folder structure settings
-                        folder_conf = config.get_setting('downloads.folder_structure', {})
-                        create_artist_folder = folder_conf.get('create_artist_folders', True)
-                        create_album_folder = folder_conf.get('create_album_folders', True)
-                        
-                        # Get base download directory
-                        download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
-                        
-                        if create_artist_folder:
-                            # Get artist name from track_info
-                            artist_name = track_info.get('artist', {}).get('name', 'Unknown Artist')
-                            # Sanitize artist name for filesystem
-                            safe_artist = self.download_manager._sanitize_filename(artist_name)
-                            artist_dir = Path(download_base) / safe_artist
+                        # Determine artist directory - use target_directory and go up if needed
+                        if target_directory:
+                            folder_conf = config.get_setting('downloads.folder_structure', {})
+                            create_artist_folder = folder_conf.get('create_artist_folders', True)
+                            create_album_folder = folder_conf.get('create_album_folders', True)
+                            
+                            if create_artist_folder:
+                                if create_album_folder:
+                                    # If we have artist/album structure, artist dir is parent of target
+                                    artist_dir = target_directory.parent
+                                else:
+                                    # If only artist folder, target dir is the artist dir
+                                    artist_dir = target_directory
+                            else:
+                                # No artist folder structure, skip artist image
+                                logger.debug("Artist folders disabled, skipping artist image save")
+                                artist_dir = None
                         else:
-                            # No artist folder structure, skip artist image
-                            logger.debug("Artist folders disabled, skipping artist image save")
-                            artist_dir = None
+                            # Fallback: recalculate directory structure (shouldn't happen normally)
+                            folder_conf = config.get_setting('downloads.folder_structure', {})
+                            create_artist_folder = folder_conf.get('create_artist_folders', True)
+                            
+                            download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
+                            
+                            if create_artist_folder:
+                                # Construct track artist name (with collaboration if multiple artists)
+                                primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
+                                artists_array = track_info.get('artists', [])
+                                
+                                if len(artists_array) > 1:
+                                    all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
+                                    if len(all_artist_names) > 1:
+                                        other_artists = all_artist_names[1:]
+                                        if len(other_artists) == 1:
+                                            artist_name = f"{all_artist_names[0]} feat. {other_artists[0]}"
+                                        else:
+                                            artist_name = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
+                                    else:
+                                        artist_name = primary_artist
+                                else:
+                                    artist_name = primary_artist
+                                
+                                safe_artist = self.download_manager._sanitize_filename(artist_name)
+                                artist_dir = Path(download_base) / safe_artist
+                            else:
+                                # No artist folder structure, skip artist image
+                                logger.debug("Artist folders disabled, skipping artist image save")
+                                artist_dir = None
                         
                         if artist_dir:
                             artist_image_filename = f"{artist_image_template}.{artist_image_format}"
@@ -1596,12 +1745,8 @@ class DownloadWorker(QRunnable):
             release_date = track_info.get('release_date', '1970-01-01')
             year_val = release_date.split('-')[0] if '-' in release_date else release_date[:4]
             
-            # Album artist handling
-            album_artist_from_api = track_info.get('album', {}).get('artist', {}).get('name', artist_val)
-            if album_artist_from_api and album_artist_from_api.lower() in ['various artists', 'various', 'compilation']:
-                album_artist_val = album_artist_from_api
-            else:
-                album_artist_val = artist_val
+            # Album artist handling - use configuration-based logic
+            album_artist_val = self._get_album_artist(track_info, artist_val)
             
             # Album disc information
             total_album_discs = track_info.get('album', {}).get('nb_discs', 1)

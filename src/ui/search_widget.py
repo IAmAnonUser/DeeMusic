@@ -17,6 +17,8 @@ from io import BytesIO
 # Use absolute imports
 from services.deezer_api import DeezerAPI
 from services.download_manager import DownloadManager
+from services.spotify_api import SpotifyAPI
+from services.playlist_converter import PlaylistConverter
 import logging
 import os
 from PyQt6.sip import isdeleted as sip_is_deleted # Added import
@@ -1012,6 +1014,42 @@ class SearchResultCard(QFrame):
             
             QTimer.singleShot(total_delay, self.load_artwork)
 
+class SpotifyDataWorkerSignals(QObject):
+    """Signals for Spotify data worker."""
+    finished = pyqtSignal(dict)        # Spotify playlist data
+    error = pyqtSignal(str)           # error message
+
+
+class SpotifyDataWorker(QRunnable):
+    """Worker for getting Spotify playlist data only (no Deezer searches)."""
+    
+    def __init__(self, playlist_converter, spotify_url):
+        super().__init__()
+        self.playlist_converter = playlist_converter
+        self.spotify_url = spotify_url
+        self.signals = SpotifyDataWorkerSignals()
+    
+    @pyqtSlot()
+    def run(self):
+        """Get Spotify playlist data."""
+        try:
+            logger.info(f"SpotifyDataWorker starting data fetch for: {self.spotify_url}")
+            
+            # Get Spotify data only (synchronous)
+            result = self.playlist_converter.get_spotify_playlist_data(self.spotify_url)
+            
+            if result:
+                logger.info(f"SpotifyDataWorker completed successfully: {len(result['tracks'])} tracks retrieved")
+                self.signals.finished.emit(result)
+            else:
+                logger.error("SpotifyDataWorker: No data returned from Spotify")
+                self.signals.error.emit("Failed to fetch playlist data from Spotify")
+                
+        except Exception as e:
+            error_message = f"Spotify data fetch failed: {str(e)}"
+            logger.error(f"SpotifyDataWorker error: {error_message}")
+            self.signals.error.emit(error_message)
+
 class SearchWidget(QWidget):
     """Widget for searching and displaying results."""
     
@@ -1024,16 +1062,54 @@ class SearchWidget(QWidget):
     album_name_clicked_from_track = pyqtSignal(int)   # Emits album_id when album name clicked in track
     back_button_pressed = pyqtSignal() # ADDED: Signal for back button
     
-    def __init__(self, deezer_api: DeezerAPI, download_manager: DownloadManager, parent=None):
+    def __init__(self, deezer_api: DeezerAPI, download_manager: DownloadManager, config_manager, parent=None):
         super().__init__(parent)
-        self.deezer_api = deezer_api
+        self._deezer_api = deezer_api  # Use private attribute for property
         self.download_manager = download_manager
         self.current_query = ""
         self.active_filter_type = "all" # Default to 'all'
         self.filter_buttons = {} # To store filter buttons for styling
         self.all_loaded_results = [] # Initialize all_loaded_results
         
+        # Initialize Spotify integration
+        self.spotify_api = SpotifyAPI(config_manager)
+        
+        # Initialize playlist converter if deezer_api is available
+        if self._deezer_api and self.spotify_api:
+            self.playlist_converter = PlaylistConverter(self.spotify_api, self._deezer_api)
+        else:
+            self.playlist_converter = None  # Will be initialized when deezer_api is set
+        
+        # Track conversion state
+        self.is_converting_playlist = False
+        self.conversion_progress_widget = None
+        
         self.setup_ui()
+    
+    def _get_deezer_api(self):
+        """Get the deezer_api."""
+        return self._deezer_api
+    
+    def _set_deezer_api(self, value):
+        """Set the deezer_api and reinitialize playlist converter."""
+        self._deezer_api = value
+        if value and self.spotify_api:
+            self.playlist_converter = PlaylistConverter(self.spotify_api, value)
+            logger.info("PlaylistConverter reinitialized with deezer_api")
+    
+    # Property for deezer_api
+    deezer_api = property(_get_deezer_api, _set_deezer_api)
+    
+    def reinitialize_spotify_client(self):
+        """Reinitialize the Spotify API client with updated credentials."""
+        if hasattr(self, 'spotify_api') and self.spotify_api:
+            self.spotify_api.reinitialize_client()
+            # Also reinitialize the playlist converter with the updated Spotify API
+            if self.deezer_api:  # Use property to ensure consistency
+                self.playlist_converter = PlaylistConverter(self.spotify_api, self.deezer_api)
+                logger.info("SearchWidget: Spotify client and playlist converter reinitialized")
+            else:
+                logger.warning("SearchWidget: Spotify client reinitialized but deezer_api not available for playlist converter")
         
     def setup_ui(self):
         """Set up the search widget UI."""
@@ -1179,6 +1255,12 @@ class SearchWidget(QWidget):
             no_query_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.results_layout.addWidget(no_query_label)
             return
+        
+        # Check if the query is a Spotify playlist URL
+        if self.spotify_api.is_spotify_playlist_url(query):
+            logger.info(f"Detected Spotify playlist URL: {query}")
+            self._handle_spotify_playlist_conversion(query)
+            return
             
         search_type_for_api = "" if self.active_filter_type == 'all' else self.active_filter_type
         limit_for_search = 60 if self.active_filter_type == 'all' else 20 # Increased limit for 'all'
@@ -1195,6 +1277,425 @@ class SearchWidget(QWidget):
         worker.signals.finished.connect(self.handle_search_results)
         worker.signals.error.connect(self.handle_search_error)
         QThreadPool.globalInstance().start(worker)
+    
+    def _handle_spotify_playlist_conversion(self, spotify_url: str):
+        """Handle conversion of a Spotify playlist URL to Deezer tracks."""
+        if self.is_converting_playlist:
+            logger.warning("Playlist conversion already in progress")
+            return
+        
+        # Check if playlist converter is available
+        if not self.playlist_converter:
+            logger.error("Playlist converter not initialized - deezer_api may not be available")
+            return
+        
+        self.is_converting_playlist = True
+        self._clear_results()
+        
+        # Hide filter buttons for playlist conversion
+        if hasattr(self, 'filter_buttons_panel'):
+            self.filter_buttons_panel.hide()
+        
+        # Create progress display
+        self._create_conversion_progress_widget()
+        
+        # Phase 1: Get Spotify data in worker thread
+        spotify_worker = SpotifyDataWorker(self.playlist_converter, spotify_url)
+        spotify_worker.signals.finished.connect(self._handle_spotify_data_received)
+        spotify_worker.signals.error.connect(self._handle_conversion_error)
+        QThreadPool.globalInstance().start(spotify_worker)
+    
+    def _handle_spotify_data_received(self, spotify_data: dict):
+        """Handle Spotify data and start Deezer conversion on main thread."""
+        try:
+            logger.info(f"Received Spotify data for {len(spotify_data['tracks'])} tracks")
+            
+            # Update progress
+            if self.conversion_status_label:
+                self.conversion_status_label.setText("Searching for tracks on Deezer...")
+            if self.conversion_progress_bar:
+                self.conversion_progress_bar.setValue(10)  # Show some progress for Spotify phase
+            
+            # Phase 2: Convert tracks to Deezer on main thread (async)
+            import asyncio
+            import qasync
+            
+            # Get the current event loop (should be qasync loop on main thread)
+            loop = asyncio.get_event_loop()
+            
+            # Create task for Deezer conversion
+            task = loop.create_task(self._convert_tracks_to_deezer_async(spotify_data))
+            
+        except Exception as e:
+            logger.error(f"Error starting Deezer conversion: {e}")
+            self._handle_conversion_error(f"Failed to start Deezer search: {str(e)}")
+    
+    async def _convert_tracks_to_deezer_async(self, spotify_data: dict):
+        """Convert Spotify tracks to Deezer matches asynchronously on main thread."""
+        try:
+            tracks = spotify_data['tracks']
+            playlist_info = spotify_data['playlist_info']
+            
+            # Convert tracks to Deezer
+            converted_tracks = await self.playlist_converter.convert_tracks_to_deezer(
+                tracks,
+                progress_callback=self._update_conversion_progress
+            )
+            
+            if converted_tracks:
+                # Create final results in the expected format
+                total_tracks = len(tracks)
+                successful_matches = sum(1 for track in converted_tracks if track.get('deezer_track'))
+                failed_matches = total_tracks - successful_matches
+                
+                conversion_results = {
+                    'playlist_info': playlist_info,
+                    'total_tracks': total_tracks,
+                    'successful_matches': successful_matches,
+                    'failed_matches': failed_matches,
+                    'tracks': converted_tracks  # Use 'tracks' instead of 'matches'
+                }
+                
+                logger.info(f"Deezer conversion completed successfully")
+                self._handle_conversion_finished(conversion_results)
+            else:
+                self._handle_conversion_error("Failed to convert tracks to Deezer")
+                
+        except Exception as e:
+            error_message = f"Deezer conversion failed: {str(e)}"
+            logger.error(error_message)
+            self._handle_conversion_error(error_message)
+    
+    def _create_conversion_progress_widget(self):
+        """Create and display the playlist conversion progress widget."""
+        self.conversion_progress_widget = QWidget()
+        progress_layout = QVBoxLayout(self.conversion_progress_widget)
+        progress_layout.setContentsMargins(20, 20, 20, 20)
+        progress_layout.setSpacing(15)
+        
+        # Title
+        title_label = QLabel("Converting Spotify Playlist")
+        title_label.setObjectName("SearchSectionHeader")
+        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        progress_layout.addWidget(title_label)
+        
+        # Progress bar
+        from PyQt6.QtWidgets import QProgressBar
+        self.conversion_progress_bar = QProgressBar()
+        self.conversion_progress_bar.setMinimum(0)
+        self.conversion_progress_bar.setMaximum(100)
+        self.conversion_progress_bar.setValue(0)
+        progress_layout.addWidget(self.conversion_progress_bar)
+        
+        # Status label
+        self.conversion_status_label = QLabel("Extracting tracks from Spotify playlist...")
+        self.conversion_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.conversion_status_label.setWordWrap(True)
+        progress_layout.addWidget(self.conversion_status_label)
+        
+        # Cancel button
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("ViewAllButton")
+        cancel_button.clicked.connect(self._cancel_conversion)
+        progress_layout.addWidget(cancel_button, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        progress_layout.addStretch()
+        self.results_layout.addWidget(self.conversion_progress_widget)
+    
+    def _update_conversion_progress(self, progress: float, status: str):
+        """Update the conversion progress display."""
+        if self.conversion_progress_bar:
+            self.conversion_progress_bar.setValue(int(progress))
+        if self.conversion_status_label:
+            self.conversion_status_label.setText(status)
+    
+    def _handle_conversion_finished(self, conversion_results: dict):
+        """Handle successful playlist conversion completion."""
+        self.is_converting_playlist = False
+        
+        if not conversion_results:
+            self._handle_conversion_error("Failed to convert playlist: No results returned")
+            return
+        
+        logger.info(f"Playlist conversion completed: {conversion_results.get('successful_matches', 0)}/{conversion_results.get('total_tracks', 0)} tracks found")
+        
+        # Clear progress widget
+        if self.conversion_progress_widget:
+            self.conversion_progress_widget.deleteLater()
+            self.conversion_progress_widget = None
+        
+        # Display conversion results
+        self._display_playlist_conversion_results(conversion_results)
+    
+    def _handle_conversion_error(self, error_message: str):
+        """Handle playlist conversion errors."""
+        self.is_converting_playlist = False
+        logger.error(f"Playlist conversion error: {error_message}")
+        
+        # Clear progress widget
+        if self.conversion_progress_widget:
+            self.conversion_progress_widget.deleteLater()
+            self.conversion_progress_widget = None
+        
+        # Show error message
+        self._clear_results()
+        
+        error_widget = QWidget()
+        error_layout = QVBoxLayout(error_widget)
+        error_layout.setContentsMargins(20, 20, 20, 20)
+        error_layout.setSpacing(15)
+        
+        error_title = QLabel("Playlist Conversion Failed")
+        error_title.setObjectName("SearchSectionHeader")
+        error_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        error_layout.addWidget(error_title)
+        
+        error_detail = QLabel(error_message)
+        error_detail.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        error_detail.setWordWrap(True)
+        error_layout.addWidget(error_detail)
+        
+        # Check if it's a library issue
+        if "spotipy library not available" in error_message.lower():
+            library_info = QLabel(
+                "The Spotify library is not installed. To fix this:\n\n"
+                "1. Install the required library: pip install spotipy>=2.22.1\n"
+                "2. Restart DeeMusic\n"
+                "3. Configure your Spotify credentials in Settings"
+            )
+            library_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            library_info.setWordWrap(True)
+            library_info.setStyleSheet("margin-top: 10px; color: #666; font-size: 11px;")
+            error_layout.addWidget(library_info)
+        # Check if it's a credentials issue
+        elif "not configured" in error_message.lower() or "not initialized" in error_message.lower() or "failed to convert playlist" in error_message.lower():
+            credentials_info = QLabel(
+                "To use Spotify playlist conversion, you need to:\n\n"
+                "1. Create a Spotify app at https://developer.spotify.com/dashboard\n"
+                "2. Get your Client ID and Client Secret\n"
+                "3. Go to Settings → Spotify tab in DeeMusic\n"
+                "4. Enter your credentials and test the connection\n"
+                "5. Save settings and try again"
+            )
+            credentials_info.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            credentials_info.setWordWrap(True)
+            credentials_info.setStyleSheet("margin-top: 10px; color: #666; font-size: 11px;")
+            error_layout.addWidget(credentials_info)
+        
+        retry_button = QPushButton("Try Again")
+        retry_button.setObjectName("ViewAllButton")
+        retry_button.clicked.connect(lambda: self.perform_search())
+        error_layout.addWidget(retry_button, 0, Qt.AlignmentFlag.AlignCenter)
+        
+        error_layout.addStretch()
+        self.results_layout.addWidget(error_widget)
+        
+        # Show filter buttons again
+        if hasattr(self, 'filter_buttons_panel'):
+            self.filter_buttons_panel.show()
+    
+    def _cancel_conversion(self):
+        """Cancel the ongoing playlist conversion."""
+        self.is_converting_playlist = False
+        logger.info("Playlist conversion cancelled by user")
+        
+        # Clear progress widget
+        if self.conversion_progress_widget:
+            self.conversion_progress_widget.deleteLater()
+            self.conversion_progress_widget = None
+        
+        # Clear results and show default message
+        self._clear_results()
+        cancelled_label = QLabel("Playlist conversion cancelled.")
+        cancelled_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.results_layout.addWidget(cancelled_label)
+        
+        # Show filter buttons again
+        if hasattr(self, 'filter_buttons_panel'):
+            self.filter_buttons_panel.show()
+    
+    def _display_playlist_conversion_results(self, conversion_results: dict):
+        """Display the results of playlist conversion."""
+        playlist_info = conversion_results.get('playlist_info', {})
+        total_tracks = conversion_results.get('total_tracks', 0)
+        successful_matches = conversion_results.get('successful_matches', 0)
+        failed_matches = conversion_results.get('failed_matches', 0)
+        
+        self._clear_results()
+        
+        # Create header with playlist info
+        header_widget = QWidget()
+        header_layout = QVBoxLayout(header_widget)
+        header_layout.setContentsMargins(20, 20, 20, 10)
+        header_layout.setSpacing(10)
+        
+        # Playlist title
+        playlist_title = QLabel(f"Converted: {playlist_info.get('name', 'Spotify Playlist')}")
+        playlist_title.setObjectName("SearchSectionHeader")
+        playlist_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        header_layout.addWidget(playlist_title)
+        
+        # Conversion stats
+        success_rate = (successful_matches / total_tracks * 100) if total_tracks > 0 else 0
+        stats_text = f"Found {successful_matches} of {total_tracks} tracks on Deezer ({success_rate:.1f}% match rate)"
+        if failed_matches > 0:
+            stats_text += f" • {failed_matches} tracks not found"
+        
+        stats_label = QLabel(stats_text)
+        stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        stats_label.setStyleSheet("color: #666; font-size: 12px;")
+        header_layout.addWidget(stats_label)
+        
+        # Add Download All button if there are successful matches
+        if successful_matches > 0:
+            download_all_container = QWidget()
+            download_all_layout = QHBoxLayout(download_all_container)
+            download_all_layout.setContentsMargins(0, 10, 0, 0)
+            download_all_layout.setSpacing(0)
+            
+            download_all_button = QPushButton("Download All")
+            download_all_button.setObjectName("ArtistDownloadButton")
+            download_all_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            download_all_button.setFixedHeight(28)
+            download_all_button.setMinimumWidth(140)
+            
+            # Store conversion results for the download handler
+            download_all_button.clicked.connect(lambda: self._download_all_converted_tracks(conversion_results))
+            
+            download_all_layout.addStretch()
+            download_all_layout.addWidget(download_all_button)
+            download_all_layout.addStretch()
+            
+            header_layout.addWidget(download_all_container)
+        
+        self.results_layout.addWidget(header_widget)
+        
+        # Format and display tracks
+        formatted_tracks = self.playlist_converter.format_for_display(conversion_results)
+        
+        if formatted_tracks:
+            # Add track list section with all converted tracks
+            self._add_converted_track_list_section(formatted_tracks)
+        else:
+            no_tracks_label = QLabel("No tracks could be converted from this playlist.")
+            no_tracks_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.results_layout.addWidget(no_tracks_label)
+        
+        self.results_layout.addStretch()
+    
+    def _add_converted_track_list_section(self, tracks: list):
+        """Add a track list section specifically for converted Spotify tracks."""
+        if not tracks:
+            return
+        
+        # Create container for the track list
+        track_list_container = QWidget()
+        container_layout = QVBoxLayout(track_list_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+        
+        # Add track list header
+        track_header = self._create_track_list_header()
+        container_layout.addWidget(track_header)
+        
+        # Add tracks with match score indicators
+        for i, track_data in enumerate(tracks):
+            # Create a special card for converted tracks
+            card = SearchResultCard(track_data, show_duration=True, track_position=i+1)
+            
+            # Add match score indicator for successful matches
+            if not track_data.get('match_failed', False):
+                match_score = track_data.get('match_score', 0)
+                if match_score >= 90:
+                    card.setToolTip(f"Excellent match ({match_score:.0f}%)")
+                elif match_score >= 70:
+                    card.setToolTip(f"Good match ({match_score:.0f}%)")
+                elif match_score >= 50:
+                    card.setToolTip(f"Fair match ({match_score:.0f}%)")
+                else:
+                    card.setToolTip(f"Weak match ({match_score:.0f}%)")
+            else:
+                card.setToolTip("No match found on Deezer")
+                # Style failed matches differently
+                card.setStyleSheet("QFrame { background-color: rgba(255, 0, 0, 0.1); }")
+            
+            # Connect signals if it's a successful match
+            if not track_data.get('match_failed', False):
+                card.download_clicked.connect(self._handle_card_download_request)
+                card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
+                card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
+            
+            container_layout.addWidget(card)
+        
+        self.results_layout.addWidget(track_list_container)
+    
+    def _download_all_converted_tracks(self, conversion_results: dict):
+        """Download all successfully converted tracks from a Spotify playlist as a playlist."""
+        try:
+            formatted_tracks = self.playlist_converter.format_for_display(conversion_results)
+            
+            # Filter only successful matches (tracks that have deezer_track data)
+            successful_tracks = [
+                track for track in formatted_tracks 
+                if not track.get('match_failed', False) and track.get('id')
+            ]
+            
+            if not successful_tracks:
+                logger.warning("No successfully converted tracks found to download")
+                return
+            
+            # Get playlist info
+            playlist_info = conversion_results.get('playlist_info', {})
+            playlist_name = playlist_info.get('name', 'Converted Spotify Playlist')
+            
+            # Create a fake playlist ID for the converted Spotify playlist
+            # Use a negative ID to distinguish from real Deezer playlists
+            fake_playlist_id = -hash(playlist_info.get('id', playlist_name)) % (10**8)
+            
+            total_tracks = len(successful_tracks)
+            
+            # Emit group download signal to show in download queue UI
+            self.download_manager.signals.group_download_enqueued.emit({
+                'group_id': str(fake_playlist_id),
+                'group_title': playlist_name,
+                'item_type': 'playlist',
+                'total_tracks': total_tracks,
+                'cover_url': None  # Spotify playlists don't have covers in our conversion
+            })
+            
+            logger.info(f"Starting playlist download for converted Spotify playlist: '{playlist_name}' with {total_tracks} tracks")
+            
+            # Queue each track as a playlist track (this follows playlist download settings)
+            for playlist_position, track_data in enumerate(successful_tracks, start=1):
+                try:
+                    track_id = track_data.get('id')
+                    if not track_id:
+                        continue
+                    
+                    # Add playlist position to track data for proper numbering
+                    track_details = track_data.copy()
+                    track_details['playlist_position'] = playlist_position
+                    
+                    logger.debug(f"Queuing playlist track {playlist_position}/{total_tracks}: {track_data.get('title', 'Unknown')} by {track_data.get('artist', {}).get('name', 'Unknown')}")
+                    
+                    # Use playlist_track item type to follow playlist folder structure and naming
+                    self.download_manager._queue_individual_track_download(
+                        track_id=track_id,
+                        item_type='playlist_track',
+                        playlist_id=fake_playlist_id,
+                        playlist_title=playlist_name,
+                        track_details=track_details,
+                        playlist_total_tracks=total_tracks
+                    )
+                    
+                except Exception as e:
+                    logger.error(f"Failed to queue track {track_data.get('title', 'Unknown')}: {e}")
+                    continue
+            
+            logger.info(f"Successfully queued {total_tracks} tracks from '{playlist_name}' for playlist download")
+                
+        except Exception as e:
+            logger.error(f"Error downloading all converted tracks: {e}")
 
     def _clear_results(self):
         logger.debug("Calling _clear_results")
@@ -2013,7 +2514,7 @@ class SearchWidget(QWidget):
 
         if item_type == 'track':
             logger.debug(f"Calling DownloadManager._queue_individual_track_download for track ID: {item_id} with item_data: {item_data}")
-            asyncio.create_task(self.download_manager._queue_individual_track_download(track_id=item_id, item_type='track', track_details=item_data))
+            self.download_manager._queue_individual_track_download(track_id=item_id, item_type='track', track_details=item_data)
         elif item_type == 'album':
             logger.info(f"Calling DownloadManager.download_album for album '{item_title}' (ID: {item_id}). Tracks will be fetched by DM.")
             asyncio.create_task(self.download_manager.download_album(album_id=item_id, track_ids=[]))
@@ -2070,7 +2571,7 @@ class SearchWidget(QWidget):
                 if album_id:
                     logger.info(f"Downloading {album_type}: '{album_title}' (ID: {album_id}) by {artist_name}")
                     # Use the existing download_album method which will fetch tracks automatically
-                    asyncio.create_task(self.download_manager.download_album(album_id=album_id, track_ids=[]))
+                    await self.download_manager.download_album(album_id=album_id, track_ids=[])
                 else:
                     logger.warning(f"Skipping album '{album_title}' - missing ID")
             

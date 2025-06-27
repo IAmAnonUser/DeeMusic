@@ -53,12 +53,12 @@ def create_simple_installer():
     installer_script = installer_dir / "install.bat"
     with open(installer_script, 'w', encoding='utf-8') as f:
         f.write(f'''@echo off
-title DeeMusic Installer v1.0.0
+title DeeMusic Installer v1.0.3
 color 0A
 echo.
 echo     ╔══════════════════════════════════════════╗
 echo     ║              DeeMusic Installer          ║
-echo     ║         Version 1.0.0                    ║
+echo     ║         Version 1.0.3                    ║
 echo     ╚══════════════════════════════════════════╝
 echo.
 echo Welcome to DeeMusic - Modern Music Streaming and Downloading
@@ -260,14 +260,14 @@ SUPPORT:
 Visit: https://github.com/IAmAnonUser/DeeMusic
 Report issues on GitHub for community support.
 
-VERSION: 1.0.0
+VERSION: 1.0.3
 BUILD DATE: {Path(exe_path).stat().st_mtime}
 ''')
     
     print("   ✅ INSTALL_README.txt")
     
     # Create zip package
-    zip_path = Path("DeeMusic_Installer_v1.0.0.zip")
+    zip_path = Path("DeeMusic_Installer_v1.0.3.zip")
     print(f"\n📦 Creating installer package: {zip_path}")
     
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
@@ -292,7 +292,7 @@ def show_usage_instructions():
     print(f"\n🎯 Distribution Instructions:")
     print("=" * 35)
     print("📤 To distribute DeeMusic:")
-    print("1. Send users the 'DeeMusic_Installer_v1.0.0.zip' file")
+    print("1. Send users the 'DeeMusic_Installer_v1.0.3.zip' file")
     print("2. Users extract the ZIP file")
     print("3. Users run 'install.bat' for guided installation")
     print("4. Alternative: Users can run DeeMusic.exe directly (portable)")
@@ -308,7 +308,7 @@ def show_usage_instructions():
     
     print(f"\n⚙️ Advanced Options:")
     print("• installer_simple/ - Raw installer files")
-    print("• DeeMusic_Installer_v1.0.0.zip - Distribution package")
+    print("• DeeMusic_Installer_v1.0.3.zip - Distribution package")
     print("• Users can run install.bat for guided setup")
     print("• Users can run DeeMusic.exe directly for portable use")
 
