@@ -346,6 +346,92 @@ class SettingsDialog(QDialog):
         # Add lyrics tab
         tabs.addTab(lyrics_tab, "Lyrics")
         
+        # Spotify tab
+        spotify_tab = QWidget()
+        spotify_layout = QVBoxLayout(spotify_tab)
+        
+        # Spotify integration settings
+        spotify_group = QGroupBox("Spotify Integration")
+        spotify_form = QFormLayout()
+        
+        # Spotify explanation
+        spotify_explanation = QLabel(
+            "To convert Spotify playlists to Deezer tracks, you need to create a Spotify app "
+            "and provide your API credentials. This allows the application to read playlist "
+            "information from Spotify and find matching tracks on Deezer."
+        )
+        spotify_explanation.setWordWrap(True)
+        spotify_form.addRow(spotify_explanation)
+        
+        # How to get credentials link
+        spotify_link = QLabel("<a href='https://developer.spotify.com/dashboard'>Create Spotify App</a>")
+        spotify_link.setOpenExternalLinks(True)
+        spotify_form.addRow("Developer Dashboard:", spotify_link)
+        
+        # Instructions
+        instructions = QLabel(
+            "1. Go to Spotify Developer Dashboard\n"
+            "2. Create a new app (any name/description)\n"
+            "3. Copy the Client ID and Client Secret below\n"
+            "4. No redirect URI needed for playlist conversion"
+        )
+        instructions.setWordWrap(True)
+        instructions.setStyleSheet("color: #666; font-size: 11px; margin: 5px 0;")
+        spotify_form.addRow(instructions)
+        
+        # Spotify Client ID
+        self.spotify_client_id = QLineEdit()
+        self.spotify_client_id.setPlaceholderText("Your Spotify App Client ID")
+        spotify_form.addRow("Client ID:", self.spotify_client_id)
+        
+        # Spotify Client Secret
+        self.spotify_client_secret = QLineEdit()
+        self.spotify_client_secret.setPlaceholderText("Your Spotify App Client Secret")
+        self.spotify_client_secret.setEchoMode(QLineEdit.EchoMode.Password)
+        spotify_form.addRow("Client Secret:", self.spotify_client_secret)
+        
+        # Show secret toggle
+        self.show_spotify_secret = QCheckBox("Show Client Secret")
+        self.show_spotify_secret.toggled.connect(self.toggle_spotify_secret_visibility)
+        spotify_form.addRow("", self.show_spotify_secret)
+        
+        # Test connection button
+        self.test_spotify_button = QPushButton("Test Spotify Connection")
+        self.test_spotify_button.clicked.connect(self.test_spotify_connection)
+        spotify_form.addRow("", self.test_spotify_button)
+        
+        # Status label
+        self.spotify_status_label = QLabel("Not configured")
+        self.spotify_status_label.setStyleSheet("color: #666;")
+        spotify_form.addRow("Status:", self.spotify_status_label)
+        
+        spotify_group.setLayout(spotify_form)
+        spotify_layout.addWidget(spotify_group)
+        
+        # Conversion settings
+        conversion_group = QGroupBox("Playlist Conversion Settings")
+        conversion_form = QFormLayout()
+        
+        self.match_threshold = QSpinBox()
+        self.match_threshold.setRange(50, 100)
+        self.match_threshold.setValue(70)
+        self.match_threshold.setSuffix("%")
+        conversion_form.addRow("Minimum Match Score:", self.match_threshold)
+        
+        self.include_failed_matches = QCheckBox("Show tracks that couldn't be matched")
+        conversion_form.addRow(self.include_failed_matches)
+        
+        self.auto_download_playlist = QCheckBox("Automatically download converted playlists")
+        conversion_form.addRow(self.auto_download_playlist)
+        
+        conversion_group.setLayout(conversion_form)
+        spotify_layout.addWidget(conversion_group)
+        
+        spotify_layout.addStretch()
+        
+        # Add Spotify tab
+        tabs.addTab(spotify_tab, "Spotify")
+        
         # Structure tab (renamed from Appearance, now includes file/folder structure)
         structure_tab = QWidget()
         structure_layout = QVBoxLayout(structure_tab)
@@ -390,6 +476,31 @@ class SettingsDialog(QDialog):
         folder_layout.addWidget(folder_button)
         folder_group.setLayout(folder_layout)
         structure_layout.addWidget(folder_group)
+        
+        # Metadata Handling section
+        metadata_group = QGroupBox("Metadata Settings")
+        metadata_form = QFormLayout()
+        
+        # Album Artist Strategy
+        self.album_artist_strategy = QComboBox()
+        self.album_artist_strategy.addItem("Use Album Artist from API (Recommended)", "album_artist_from_api")
+        self.album_artist_strategy.addItem("Always use Track Artist", "track_artist")
+        self.album_artist_strategy.addItem("Various Artists for Compilations Only", "compilation_aware")
+        
+        strategy_help = QLabel(
+            "Controls how the Album Artist field is set in metadata:\n"
+            "• Album Artist from API: Uses the actual album artist (different from track artist)\n"
+            "• Track Artist: Always copies track artist to album artist\n"
+            "• Compilation Aware: Uses album artist except for 'Various Artists' compilations"
+        )
+        strategy_help.setWordWrap(True)
+        strategy_help.setStyleSheet("font-size: 10px; color: #666; padding: 5px;")
+        
+        metadata_form.addRow("Album Artist Strategy:", self.album_artist_strategy)
+        metadata_form.addRow("", strategy_help)
+        
+        metadata_group.setLayout(metadata_form)
+        structure_layout.addWidget(metadata_group)
         
         structure_layout.addStretch()
         
@@ -492,6 +603,70 @@ class SettingsDialog(QDialog):
             self.arl_input.setEchoMode(QLineEdit.EchoMode.Normal)
         else:
             self.arl_input.setEchoMode(QLineEdit.EchoMode.Password)
+    
+    def toggle_spotify_secret_visibility(self, checked):
+        """Toggle the visibility of the Spotify client secret."""
+        if checked:
+            self.spotify_client_secret.setEchoMode(QLineEdit.EchoMode.Normal)
+        else:
+            self.spotify_client_secret.setEchoMode(QLineEdit.EchoMode.Password)
+    
+    def test_spotify_connection(self):
+        """Test the Spotify API connection."""
+        client_id = self.spotify_client_id.text().strip()
+        client_secret = self.spotify_client_secret.text().strip()
+        
+        if not client_id or not client_secret:
+            QMessageBox.warning(self, "Missing Credentials", "Please enter both Client ID and Client Secret.")
+            return
+        
+        try:
+            # Test the Spotify credentials
+            try:
+                import spotipy
+                from spotipy.oauth2 import SpotifyClientCredentials
+            except ImportError:
+                QMessageBox.critical(self, "Missing Library", 
+                                   "The Spotify library (spotipy) is not installed.\n\n"
+                                   "Please install it with: pip install spotipy>=2.22.1\n"
+                                   "Then restart the application.")
+                return
+            
+            self.test_spotify_button.setText("Testing...")
+            self.test_spotify_button.setEnabled(False)
+            
+            client_credentials_manager = SpotifyClientCredentials(
+                client_id=client_id,
+                client_secret=client_secret
+            )
+            spotify = spotipy.Spotify(client_credentials_manager=client_credentials_manager)
+            
+            # Try to make a simple API call
+            result = spotify.search(q="test", type="track", limit=1)
+            
+            if result:
+                self.spotify_status_label.setText("Connected successfully!")
+                self.spotify_status_label.setStyleSheet("color: green;")
+                QMessageBox.information(self, "Success", "Spotify connection successful! You can now convert Spotify playlists.")
+            else:
+                raise Exception("No results returned from test search")
+                
+        except Exception as e:
+            error_msg = str(e)
+            if "invalid_client" in error_msg.lower():
+                error_msg = "Invalid Client ID or Client Secret. Please check your credentials."
+            elif "unauthorized" in error_msg.lower():
+                error_msg = "Authentication failed. Please verify your credentials."
+            else:
+                error_msg = f"Connection failed: {error_msg}"
+            
+            self.spotify_status_label.setText("Connection failed")
+            self.spotify_status_label.setStyleSheet("color: red;")
+            QMessageBox.critical(self, "Connection Failed", error_msg)
+        
+        finally:
+            self.test_spotify_button.setText("Test Spotify Connection")
+            self.test_spotify_button.setEnabled(True)
 
     def load_settings(self):
         """Load settings from configuration into the UI."""
@@ -569,6 +744,30 @@ class SettingsDialog(QDialog):
         self.lyrics_path.setText(self.config.get_setting('lyrics.custom_path', ''))
         self.sync_offset.setValue(self.config.get_setting('lyrics.sync_offset', 0))
         self.lyrics_encoding.setCurrentText(self.config.get_setting('lyrics.encoding', 'UTF-8'))
+        
+        # Load Spotify settings
+        self.spotify_client_id.setText(self.config.get_setting('spotify.client_id', ''))
+        self.spotify_client_secret.setText(self.config.get_setting('spotify.client_secret', ''))
+        self.match_threshold.setValue(self.config.get_setting('spotify.match_threshold', 70))
+        self.include_failed_matches.setChecked(self.config.get_setting('spotify.include_failed_matches', True))
+        self.auto_download_playlist.setChecked(self.config.get_setting('spotify.auto_download_playlist', False))
+        
+        # Update Spotify status
+        client_id = self.config.get_setting('spotify.client_id', '')
+        client_secret = self.config.get_setting('spotify.client_secret', '')
+        if client_id and client_secret:
+            self.spotify_status_label.setText("Configured")
+            self.spotify_status_label.setStyleSheet("color: green;")
+        else:
+            self.spotify_status_label.setText("Not configured")
+            self.spotify_status_label.setStyleSheet("color: #666;")
+        
+        # Load metadata settings
+        album_artist_strategy = self.config.get_setting('metadata.album_artist_strategy', 'album_artist_from_api')
+        for i in range(self.album_artist_strategy.count()):
+            if self.album_artist_strategy.itemData(i) == album_artist_strategy:
+                self.album_artist_strategy.setCurrentIndex(i)
+                break
 
     def show_folder_settings(self):
         """Show the folder structure settings dialog."""
@@ -805,6 +1004,38 @@ class SettingsDialog(QDialog):
         if encoding != self.config.get_setting('lyrics.encoding'):
             self.config.set_setting('lyrics.encoding', encoding)
             changes['lyrics.encoding'] = encoding
+        
+        # Save metadata settings
+        album_artist_strategy = self.album_artist_strategy.currentData()
+        if album_artist_strategy != self.config.get_setting('metadata.album_artist_strategy'):
+            self.config.set_setting('metadata.album_artist_strategy', album_artist_strategy)
+            changes['metadata.album_artist_strategy'] = album_artist_strategy
+        
+        # Save Spotify settings
+        spotify_client_id = self.spotify_client_id.text().strip()
+        if spotify_client_id != self.config.get_setting('spotify.client_id'):
+            self.config.set_setting('spotify.client_id', spotify_client_id)
+            changes['spotify.client_id'] = spotify_client_id
+            
+        spotify_client_secret = self.spotify_client_secret.text().strip()
+        if spotify_client_secret != self.config.get_setting('spotify.client_secret'):
+            self.config.set_setting('spotify.client_secret', spotify_client_secret)
+            changes['spotify.client_secret'] = spotify_client_secret
+            
+        match_threshold = self.match_threshold.value()
+        if match_threshold != self.config.get_setting('spotify.match_threshold'):
+            self.config.set_setting('spotify.match_threshold', match_threshold)
+            changes['spotify.match_threshold'] = match_threshold
+            
+        include_failed = self.include_failed_matches.isChecked()
+        if include_failed != self.config.get_setting('spotify.include_failed_matches'):
+            self.config.set_setting('spotify.include_failed_matches', include_failed)
+            changes['spotify.include_failed_matches'] = include_failed
+            
+        auto_download = self.auto_download_playlist.isChecked()
+        if auto_download != self.config.get_setting('spotify.auto_download_playlist'):
+            self.config.set_setting('spotify.auto_download_playlist', auto_download)
+            changes['spotify.auto_download_playlist'] = auto_download
             
         # Save all settings
         self.config.save_config()
@@ -866,6 +1097,18 @@ class SettingsDialog(QDialog):
             self.lyrics_path.setText("")
             self.sync_offset.setValue(0)
             self.lyrics_encoding.setCurrentText("UTF-8")
+            
+            # Reset Spotify settings
+            self.spotify_client_id.setText("")
+            self.spotify_client_secret.setText("")
+            self.match_threshold.setValue(70)
+            self.include_failed_matches.setChecked(True)
+            self.auto_download_playlist.setChecked(False)
+            self.spotify_status_label.setText("Not configured")
+            self.spotify_status_label.setStyleSheet("color: #666;")
+            
+            # Reset metadata settings
+            self.album_artist_strategy.setCurrentIndex(0)  # Set to first option (album_artist_from_api)
             
             # Save all settings
             self.config.save_config()

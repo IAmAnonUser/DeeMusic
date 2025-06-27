@@ -22,9 +22,9 @@ def get_version():
     """Get version from config or default."""
     try:
         # Try to read version from a config file or use default
-        return "1.0.2"
+        return "1.0.3"
     except:
-        return "1.0.2"
+        return "1.0.3"
 
 def build_application():
     """Build the application executable."""
@@ -69,6 +69,8 @@ def build_application():
         '--hidden-import=python-dotenv',
         '--hidden-import=tqdm',
         '--hidden-import=fuzzywuzzy',
+        '--hidden-import=spotipy',
+        '--hidden-import=spotipy.oauth2',
         '--hidden-import=yarl',
         '--hidden-import=yt_dlp',
         
@@ -83,6 +85,8 @@ def build_application():
         '--hidden-import=config_manager',
         '--hidden-import=services.deezer_api',
         '--hidden-import=services.download_manager',
+        '--hidden-import=services.spotify_api',
+        '--hidden-import=services.playlist_converter',
         '--hidden-import=utils.image_cache',
         '--hidden-import=models',
         

@@ -33,6 +33,9 @@ python-Levenshtein
 # Media Downloading
 yt-dlp
 
+# Spotify Integration
+spotipy>=2.22.1
+
 # Additional dependencies
 fastapi>=0.68.0
 uvicorn>=0.15.0

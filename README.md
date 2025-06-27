@@ -9,6 +9,7 @@ A modern desktop application for downloading and managing music with an intuitiv
 - 🎵 **High-Quality Downloads**: Support for MP3 (320kbps) and FLAC formats
 - 🎨 **Modern Interface**: Beautiful dark/light theme with responsive design
 - 🔍 **Smart Search**: Find tracks, albums, artists, and playlists instantly
+- 🎧 **Spotify Playlist Conversion**: Convert Spotify playlists to Deezer with automatic track matching
 - 📊 **Music Discovery**: Browse charts and recommendations
 - 📁 **Smart Organization**: Customizable folder structures and file naming
 - 🖼️ **Artwork Management**: High-resolution album covers automatically embedded
@@ -55,15 +56,33 @@ python run.py
 - **Download Directory**: Where files are saved
 - **Audio Quality**: MP3 320kbps or FLAC
 - **File Organization**: Artist/Album folder structure
+- **Spotify Integration**: Convert Spotify playlists (requires Spotify API credentials)
 - **Theme**: Dark or Light mode
+
+### Spotify Playlist Conversion Setup
+1. **Create a Spotify App:**
+   - Visit [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   - Create a new app (name: anything you want)
+   - Copy your Client ID and Client Secret
+
+2. **Configure DeeMusic:**
+   - Go to Settings → Spotify tab
+   - Enter your Client ID and Client Secret
+   - Test the connection and save
+
+3. **Convert Playlists:**
+   - Paste any Spotify playlist URL into the search bar
+   - DeeMusic automatically finds matching tracks on Deezer
+   - Click "Download All" to download the entire converted playlist
 
 ## 🎯 How to Use
 
-1. **Search**: Use the search bar to find music
+1. **Search**: Use the search bar to find music or paste Spotify playlist URLs
 2. **Browse**: Explore charts and recommendations on the home page
-3. **Download**: Click the download button on any track, album, or playlist
-4. **Monitor**: Watch progress in the Download Queue
-5. **Enjoy**: Your music is organized in your chosen download folder
+3. **Convert**: Paste Spotify playlist URLs to automatically find Deezer matches
+4. **Download**: Click the download button on any track, album, or playlist
+5. **Monitor**: Watch progress in the Download Queue
+6. **Enjoy**: Your music is organized in your chosen download folder
 
 ## 🏗️ Building
 
