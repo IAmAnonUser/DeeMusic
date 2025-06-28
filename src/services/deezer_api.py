@@ -1486,6 +1486,27 @@ class DeezerAPI:
             logger.warning(f"Title (sng_title) not found for track {track_id_str}")
             processed_info['title'] = f"Track {track_id_str}"
 
+        # Handle VERSION field for track versions (remixes, extended mixes, etc.)
+        version = None
+        if 'VERSION' in raw_data and raw_data['VERSION']:
+            version = raw_data['VERSION'].strip()
+        elif 'version' in processed_info and processed_info['version']:
+            version = processed_info['version'].strip()
+        
+        # Combine title with version if version exists and is not already in title
+        if version and processed_info['title']:
+            current_title = processed_info['title']
+            # Only add version if it's not already included in the title
+            if version not in current_title:
+                processed_info['title'] = f"{current_title} {version}".strip()
+                logger.debug(f"Added version '{version}' to title for track {track_id_str}: '{processed_info['title']}'")
+            else:
+                logger.debug(f"Version '{version}' already present in title for track {track_id_str}")
+        elif version:
+            logger.debug(f"Found version '{version}' but no title for track {track_id_str}")
+
+        # Store the original version info for potential future use
+        processed_info['version'] = version
 
         # Artist Info (ensure 'artist' key with at least 'name')
         artist_data_lc = processed_info.get('artist', {}) # from ARTIST if it was there
@@ -1571,6 +1592,7 @@ class DeezerAPI:
             'md5_origin': 'MD5_ORIGIN',
             'alb_picture': 'ALB_PICTURE', # For album cover MD5
             'art_picture': 'ART_PICTURE', # For artist picture MD5
+            'version': 'VERSION', # Track version (remix, extended, etc.)
         }
 
         for target_key, source_key_uc in key_mappings_to_ensure.items():
