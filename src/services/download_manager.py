@@ -78,7 +78,7 @@ class DownloadWorker(QRunnable):
         import traceback
         logger.info(f"[DownloadWorker:{self.item_id_str}] Stop call stack: {traceback.format_stack()}")
         self._is_stopping = True
-    
+
     def _get_album_artist(self, track_info: dict, track_artist: str) -> str:
         """Get album artist based on user configuration and track data.
         
@@ -1072,14 +1072,14 @@ class DownloadWorker(QRunnable):
                             album_dir = target_directory
                         else:
                             # Fallback: recalculate directory structure (shouldn't happen normally)
-                            folder_conf = config.get_setting('downloads.folder_structure', {})
-                            create_artist_folder = folder_conf.get('create_artist_folders', True)
-                            create_album_folder = folder_conf.get('create_album_folders', True)
-                            
-                            download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
-                            album_dir = Path(download_base)
-                            
-                            if create_artist_folder:
+                        folder_conf = config.get_setting('downloads.folder_structure', {})
+                        create_artist_folder = folder_conf.get('create_artist_folders', True)
+                        create_album_folder = folder_conf.get('create_album_folders', True)
+                        
+                        download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
+                        album_dir = Path(download_base)
+                        
+                        if create_artist_folder:
                                 # Construct track artist name (with collaboration if multiple artists)
                                 primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
                                 artists_array = track_info.get('artists', [])
@@ -1097,13 +1097,13 @@ class DownloadWorker(QRunnable):
                                 else:
                                     artist_name = primary_artist
                                 
-                                safe_artist = self.download_manager._sanitize_filename(artist_name)
-                                album_dir = album_dir / safe_artist
-                                
-                            if create_album_folder:
-                                album_name = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
-                                safe_album = self.download_manager._sanitize_filename(album_name)
-                                album_dir = album_dir / safe_album
+                            safe_artist = self.download_manager._sanitize_filename(artist_name)
+                            album_dir = album_dir / safe_artist
+                            
+                        if create_album_folder:
+                            album_name = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
+                            safe_album = self.download_manager._sanitize_filename(album_name)
+                            album_dir = album_dir / safe_album
                         
                         album_cover_filename = f"{album_image_template}.{album_image_format}"
                         album_cover_path = album_dir / album_cover_filename
@@ -1149,10 +1149,10 @@ class DownloadWorker(QRunnable):
                     if artist_image_url:
                         # Determine artist directory - use target_directory and go up if needed
                         if target_directory:
-                            folder_conf = config.get_setting('downloads.folder_structure', {})
-                            create_artist_folder = folder_conf.get('create_artist_folders', True)
-                            create_album_folder = folder_conf.get('create_album_folders', True)
-                            
+                        folder_conf = config.get_setting('downloads.folder_structure', {})
+                        create_artist_folder = folder_conf.get('create_artist_folders', True)
+                        create_album_folder = folder_conf.get('create_album_folders', True)
+                        
                             if create_artist_folder:
                                 if create_album_folder:
                                     # If we have artist/album structure, artist dir is parent of target
@@ -1169,9 +1169,9 @@ class DownloadWorker(QRunnable):
                             folder_conf = config.get_setting('downloads.folder_structure', {})
                             create_artist_folder = folder_conf.get('create_artist_folders', True)
                             
-                            download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
-                            
-                            if create_artist_folder:
+                        download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
+                        
+                        if create_artist_folder:
                                 # Construct track artist name (with collaboration if multiple artists)
                                 primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
                                 artists_array = track_info.get('artists', [])
@@ -1189,12 +1189,12 @@ class DownloadWorker(QRunnable):
                                 else:
                                     artist_name = primary_artist
                                 
-                                safe_artist = self.download_manager._sanitize_filename(artist_name)
-                                artist_dir = Path(download_base) / safe_artist
-                            else:
-                                # No artist folder structure, skip artist image
-                                logger.debug("Artist folders disabled, skipping artist image save")
-                                artist_dir = None
+                            safe_artist = self.download_manager._sanitize_filename(artist_name)
+                            artist_dir = Path(download_base) / safe_artist
+                        else:
+                            # No artist folder structure, skip artist image
+                            logger.debug("Artist folders disabled, skipping artist image save")
+                            artist_dir = None
                         
                         if artist_dir:
                             artist_image_filename = f"{artist_image_template}.{artist_image_format}"
