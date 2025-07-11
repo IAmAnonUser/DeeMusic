@@ -4,8 +4,8 @@ import logging
 import asyncio
 from typing import Dict, List, Optional, Tuple
 from fuzzywuzzy import fuzz
-from services.spotify_api import SpotifyAPI
-from services.deezer_api import DeezerAPI
+from src.services.spotify_api import SpotifyAPI
+from src.services.deezer_api import DeezerAPI
 
 logger = logging.getLogger(__name__)
 

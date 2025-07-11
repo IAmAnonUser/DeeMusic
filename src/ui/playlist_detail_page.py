@@ -19,8 +19,8 @@ import requests
 from src.ui.search_widget import SearchResultCard
 from src.ui.track_list_header_widget import TrackListHeaderWidget
 # Import caching utility for main playlist cover
-from utils.image_cache import get_image_from_cache, save_image_to_cache
-from utils.icon_utils import get_icon
+from src.utils.image_cache import get_image_from_cache, save_image_to_cache
+from src.utils.icon_utils import get_icon
 
 logger = logging.getLogger(__name__)
 

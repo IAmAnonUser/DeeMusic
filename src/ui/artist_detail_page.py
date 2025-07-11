@@ -2,26 +2,28 @@
 Artist Detail Page for DeeMusic application.
 Displays information about a selected artist.
 """
-from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QLabel, QScrollArea, QHBoxLayout, QPushButton, QFrame, 
-    QGridLayout, QSizePolicy, QStackedWidget, QTabBar
-)
-from PyQt6.QtCore import Qt, pyqtSignal, QSize, QObject, QRunnable, QThreadPool, pyqtSlot, QThread, QTimer
-from PyQt6.QtGui import QIcon, QPixmap, QImage, QPainter, QColor, QPen, QBitmap, QPainterPath
-from PyQt6.sip import isdeleted as sip_is_deleted
-import logging
-import os
 import asyncio
-from collections.abc import Callable
+import logging
+import time
+import os
 from io import BytesIO
 import requests
+from typing import Optional, List, Dict, Any
 
 # Import the new caching utility
-from utils.image_cache import get_image_from_cache, save_image_to_cache
+from src.utils.image_cache_optimized import OptimizedImageCache
+from src.utils.performance_manager import PerformanceManager
 
-from src.ui.search_widget import SearchResultCard # Added import
-from src.ui.track_list_header_widget import TrackListHeaderWidget # ADDED
-from ui.components.responsive_grid import ResponsiveGridWidget, ResponsiveScrollArea
+from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
+                             QPushButton, QScrollArea, QFrame, QStackedWidget, 
+                             QTabBar, QGridLayout, QSizePolicy)
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QRunnable, QThreadPool, pyqtSlot, QSize
+from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QFont, QIcon, QColor, QImage
+
+from src.ui.components.responsive_grid import ResponsiveGridWidget, ResponsiveScrollArea
+from src.ui.components.album_sort_header import AlbumSortHeader
+from src.ui.track_list_header_widget import TrackListHeaderWidget
+from src.ui.search_widget import SearchResultCard
 from src.ui.flowlayout import FlowLayout # Use our custom FlowLayout
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,12 @@ class ArtistDetailPage(QWidget):
         
         # Track current image loader to avoid conflicts
         self._current_image_loader = None
+        
+        # Add data caching for sorting
+        self._albums_data_cache = []
+        self._singles_data_cache = []
+        self._eps_data_cache = []
+        self._featured_in_data_cache = []
 
         # Initialize UI
         self._setup_ui()
@@ -323,6 +331,11 @@ class ArtistDetailPage(QWidget):
                 'eps': False,
                 'featured_in': False
             }
+        else:
+            # Force reload of singles and eps since they may have failed before
+            logger.info(f"[ArtistDetail] Force resetting singles and eps cache due to previous loading issues")
+            self._tabs_loaded['singles'] = False
+            self._tabs_loaded['eps'] = False
         
         self.current_artist_id = artist_id
         # Loading state is already set by set_loading_state() for immediate UI response
@@ -505,7 +518,7 @@ class ArtistDetailPage(QWidget):
             logger.warning("[ArtistDetail] _apply_circular_mask_and_set_pixmap: self or artist_image_label is None or deleted.")
             return
 
-        if self._safe_sip_is_deleted(pixmap) or pixmap.isNull():
+        if pixmap is None or pixmap.isNull():
             logger.warning("[ArtistDetail] _apply_circular_mask_and_set_pixmap: Received null or invalid pixmap.")
             self._set_artist_image_placeholder() # Fallback to placeholder if pixmap is bad
             return
@@ -584,7 +597,7 @@ class ArtistDetailPage(QWidget):
         loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.top_tracks_list_layout.addWidget(loading_label)
 
-        if self._safe_sip_is_deleted(self.current_artist_id) or self._safe_sip_is_deleted(self.deezer_api):
+        if not self.current_artist_id or not self.deezer_api:
             logger.warning("[ArtistDetail.load_top_tracks] No current_artist_id set.")
             self._show_error_in_layout(self.top_tracks_list_layout, "No artist selected.")
             return
@@ -646,26 +659,142 @@ class ArtistDetailPage(QWidget):
             if column_name == "title":
                 return track.get('title', '').lower()
             elif column_name == "artist":
-                artist_data = track.get('artist', {})
-                if isinstance(artist_data, dict):
-                    return artist_data.get('name', '').lower()
-                return ''
+                artist = track.get('artist', {})
+                if isinstance(artist, dict):
+                    return artist.get('name', '').lower()
+                return str(artist).lower()
             elif column_name == "album":
-                album_data = track.get('album', {})
-                if isinstance(album_data, dict):
-                    return album_data.get('title', '').lower()
-                return ''
+                album = track.get('album', {})
+                if isinstance(album, dict):
+                    return album.get('title', '').lower()
+                return str(album).lower()
             elif column_name == "duration":
                 return track.get('duration', 0)
             else:
-                return ''
+                return track.get(column_name, '')
         
         try:
-            sorted_tracks = sorted(tracks_data, key=get_sort_key, reverse=not ascending)
-            return sorted_tracks
+            return sorted(tracks_data, key=get_sort_key, reverse=not ascending)
         except Exception as e:
-            logger.error(f"[ArtistDetail] Error sorting tracks: {e}")
-            return tracks_data  # Return original data if sorting fails
+            logger.error(f"Error sorting tracks: {e}")
+            return tracks_data
+    
+    def _sort_albums_by(self, albums_data: List[Dict], sort_by: str, ascending: bool) -> List[Dict]:
+        """Sort albums by the specified criteria."""
+        def get_sort_key(album):
+            if sort_by == "title":
+                return album.get('title', '').lower()
+            elif sort_by == "release_date":
+                # Handle release date sorting
+                release_date = album.get('release_date', '')
+                if not release_date:
+                    return '0000-00-00'  # Put items without dates at the end
+                return release_date
+            elif sort_by == "nb_tracks":
+                return album.get('nb_tracks', 0)
+            else:
+                return album.get(sort_by, '')
+        
+        try:
+            return sorted(albums_data, key=get_sort_key, reverse=not ascending)
+        except Exception as e:
+            logger.error(f"Error sorting albums: {e}")
+            return albums_data
+    
+    def _handle_album_sort(self, sort_by: str, ascending: bool, tab_type: str):
+        """Handle album sorting for different tab types."""
+        logger.info(f"[ArtistDetail] Sorting {tab_type} by {sort_by}, ascending: {ascending}")
+        
+        # Get the appropriate data cache and scroll area
+        if tab_type == "albums":
+            data_cache = self._albums_data_cache
+            scroll_area = self.albums_page.findChild(QScrollArea) if hasattr(self, 'albums_page') else None
+        elif tab_type == "singles":
+            data_cache = self._singles_data_cache
+            scroll_area = self.singles_page.findChild(QScrollArea) if hasattr(self, 'singles_page') else None
+        elif tab_type == "eps":
+            data_cache = self._eps_data_cache
+            scroll_area = self.eps_page.findChild(QScrollArea) if hasattr(self, 'eps_page') else None
+        elif tab_type == "featured_in":
+            data_cache = self._featured_in_data_cache
+            scroll_area = self.featured_in_page.findChild(QScrollArea) if hasattr(self, 'featured_in_page') else None
+        else:
+            logger.warning(f"Unknown tab type for sorting: {tab_type}")
+            return
+        
+        if not data_cache:
+            logger.warning(f"No data cache available for {tab_type} sorting")
+            return
+            
+        if not scroll_area:
+            logger.warning(f"No scroll area found for {tab_type} sorting")
+            return
+        
+        # Sort the data
+        sorted_data = self._sort_albums_by(data_cache, sort_by, ascending)
+        
+        # Update the display with sorted data
+        self._update_album_grid_display(sorted_data, scroll_area, tab_type)
+    
+    def _update_album_grid_display(self, albums_data: List[Dict], scroll_area: QScrollArea, tab_type: str):
+        """Update the album grid display with sorted data."""
+        try:
+            # Create new responsive grid
+            responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
+            
+            # Process each album and create cards
+            cards = []
+            for album_data in albums_data:
+                if not isinstance(album_data, dict):
+                    logger.warning(f"[ArtistDetail] Skipping non-dict album item: {album_data}")
+                    continue
+                
+                # Ensure required fields
+                if 'type' not in album_data:
+                    album_data['type'] = 'album'
+                
+                # Add artist information since we're on an artist page
+                if self.current_artist_data and self.current_artist_data.get('name'):
+                    album_data['artist_name'] = self.current_artist_data['name']
+                    if 'artist' not in album_data:
+                        album_data['artist'] = {
+                            'id': self.current_artist_id,
+                            'name': self.current_artist_data['name']
+                        }
+                
+                # Ensure picture_url field
+                if 'picture_url' not in album_data:
+                    for field in ['cover_xl', 'cover_big', 'cover_medium', 'cover_small', 'cover']:
+                        if field in album_data and album_data[field]:
+                            album_data['picture_url'] = album_data[field]
+                            break
+                
+                # Create card
+                try:
+                    card = SearchResultCard(album_data)
+                    # Connect signals
+                    if hasattr(card, 'card_selected'):
+                        if tab_type == "featured_in":
+                            card.card_selected.connect(self._handle_playlist_card_selected)
+                        else:
+                            card.card_selected.connect(lambda data=album_data: self._on_album_selected_for_navigation(data, 'album'))
+                    if hasattr(card, 'download_clicked'):
+                        if tab_type == "featured_in":
+                            card.download_clicked.connect(self._initiate_playlist_download_for_card)
+                        else:
+                            card.download_clicked.connect(lambda data=album_data: self._initiate_album_download_for_card(data))
+                    
+                    cards.append(card)
+                except Exception as card_error:
+                    logger.error(f"[ArtistDetail] Error creating card: {card_error}", exc_info=True)
+            
+            # Set all cards to the responsive grid
+            responsive_grid.set_cards(cards)
+            scroll_area.setWidget(responsive_grid)
+            logger.info(f"[ArtistDetail] Updated {tab_type} grid with {len(cards)} sorted items")
+            
+        except Exception as e:
+            logger.error(f"[ArtistDetail] Error updating {tab_type} grid display: {e}", exc_info=True)
 
     def _show_error_in_layout(self, layout, message): # Helper to show errors in a given layout
         self._clear_layout(layout)
@@ -683,11 +812,11 @@ class ArtistDetailPage(QWidget):
     def _initiate_album_download_for_card(self, album_data: dict):
         """Slot for album card's download button. Initiates async fetching of tracks."""
         logger.info(f"[ArtistDetail] Album download initiated via card for: {album_data.get('title')}")
-        if self._safe_sip_is_deleted(self.deezer_api):
+        if not self.deezer_api:
             logger.error("[ArtistDetail] DeezerAPI not available to fetch album tracks for download.")
             # Optionally, inform the user via a QMessageBox or status bar update
             return
-        if self._safe_sip_is_deleted(album_data) or not album_data.get('id'):
+        if not album_data or not album_data.get('id'):
             logger.error("[ArtistDetail] Invalid album data received for download initiation.")
             return
 
@@ -697,10 +826,10 @@ class ArtistDetailPage(QWidget):
     def _initiate_playlist_download_for_card(self, playlist_data: dict):
         """Slot for playlist card's download button. Initiates async fetching of tracks."""
         logger.info(f"[ArtistDetail] Playlist download initiated via card for: {playlist_data.get('title')}")
-        if self._safe_sip_is_deleted(self.deezer_api):
+        if not self.deezer_api:
             logger.error("[ArtistDetail] DeezerAPI not available to fetch playlist tracks for download.")
             return
-        if self._safe_sip_is_deleted(playlist_data) or not playlist_data.get('id'):
+        if not playlist_data or not playlist_data.get('id'):
             logger.error("[ArtistDetail] Invalid playlist data received for download initiation.")
             return
 
@@ -715,7 +844,7 @@ class ArtistDetailPage(QWidget):
         
         try:
             # Ensure deezer_api is available
-            if self._safe_sip_is_deleted(self.deezer_api):
+            if not self.deezer_api:
                 logger.error(f"[ArtistDetail] DeezerAPI not available for _handle_album_card_download_request (album: {album_title})")
                 return
 
@@ -752,7 +881,7 @@ class ArtistDetailPage(QWidget):
         
         try:
             # Ensure deezer_api is available
-            if self._safe_sip_is_deleted(self.deezer_api):
+            if not self.deezer_api:
                 logger.error(f"[ArtistDetail] DeezerAPI not available for _handle_playlist_card_download_request (playlist: {playlist_title})")
                 return
 
@@ -769,7 +898,7 @@ class ArtistDetailPage(QWidget):
 
     async def load_albums(self):
         logger.info(f"[ArtistDetail.load_albums] METHOD CALLED for artist {self.current_artist_id}")
-        if self._safe_sip_is_deleted(self.current_artist_id) or self._safe_sip_is_deleted(self.deezer_api):
+        if not self.current_artist_id or not self.deezer_api:
             logger.warning(f"[ArtistDetail.load_albums] No artist ID or API available.")
             return
 
@@ -818,7 +947,7 @@ class ArtistDetailPage(QWidget):
                         scroll_area.setWidget(retry_label)
                         await asyncio.sleep(1)  # Brief pause before retry
                         
-            if self._safe_sip_is_deleted(all_artist_releases) or not all_artist_releases:
+            if not all_artist_releases:
                 logger.info(f"[ArtistDetail.load_albums] No releases found for artist {self.current_artist_id}")
                 no_albums_label = QLabel("No albums found for this artist.")
                 no_albums_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -847,6 +976,9 @@ class ArtistDetailPage(QWidget):
                 return
             
             logger.info(f"[ArtistDetail.load_albums] Found {len(albums_data)} albums for artist {self.current_artist_id}")
+            
+            # Cache the data for sorting
+            self._albums_data_cache = albums_data.copy()
             
             # Use responsive grid for albums
             responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
@@ -910,7 +1042,7 @@ class ArtistDetailPage(QWidget):
 
     async def load_singles(self):
         logger.info(f"[ArtistDetail.load_singles] METHOD CALLED for artist {self.current_artist_id}")
-        if self._safe_sip_is_deleted(self.current_artist_id) or self._safe_sip_is_deleted(self.deezer_api):
+        if not self.current_artist_id or not self.deezer_api:
             logger.warning(f"[ArtistDetail.load_singles] No artist ID or API available.")
             return
 
@@ -960,6 +1092,9 @@ class ArtistDetailPage(QWidget):
                     return
                 
                 logger.info(f"[ArtistDetail.load_singles] Found {len(singles_data)} singles for artist {self.current_artist_id}")
+                
+                # Cache the data for sorting
+                self._singles_data_cache = singles_data.copy()
                 
                 # Use responsive grid for singles
                 responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
@@ -1018,13 +1153,6 @@ class ArtistDetailPage(QWidget):
                 scroll_area.setWidget(error_label)
                 return
             
-            if self._safe_sip_is_deleted(all_artist_releases) or not all_artist_releases:
-                logger.info(f"[ArtistDetail.load_singles] No releases found for artist {self.current_artist_id}")
-                no_singles_label = QLabel("No singles found for this artist.")
-                no_singles_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                scroll_area.setWidget(no_singles_label)
-                return
-            
         except Exception as e:
             logger.error(f"[ArtistDetail.load_singles] Exception in load_singles for artist {self.current_artist_id}: {e}", exc_info=True)
             error_label = QLabel(f"Error: {str(e)[:100]}")
@@ -1033,7 +1161,7 @@ class ArtistDetailPage(QWidget):
 
     async def load_eps(self):
         logger.info(f"[ArtistDetail.load_eps] METHOD CALLED for artist {self.current_artist_id}")
-        if self._safe_sip_is_deleted(self.current_artist_id) or self._safe_sip_is_deleted(self.deezer_api):
+        if not self.current_artist_id or not self.deezer_api:
             logger.warning(f"[ArtistDetail.load_eps] No artist ID or API available.")
             return
 
@@ -1068,7 +1196,7 @@ class ArtistDetailPage(QWidget):
                 scroll_area.setWidget(error_label)
                 return
             
-            if self._safe_sip_is_deleted(all_artist_releases) or not all_artist_releases:
+            if not all_artist_releases:
                 logger.info(f"[ArtistDetail] No releases found for artist {self.current_artist_id}")
                 no_eps_label = QLabel("No EPs found for this artist.")
                 no_eps_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1104,6 +1232,9 @@ class ArtistDetailPage(QWidget):
                 return
             
             logger.info(f"[ArtistDetail.load_eps] Found {len(eps_data)} EPs for artist {self.current_artist_id}")
+            
+            # Cache the data for sorting
+            self._eps_data_cache = eps_data.copy()
             
             # Use responsive grid for EPs
             responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
@@ -1201,7 +1332,7 @@ class ArtistDetailPage(QWidget):
 
     async def load_featured_in(self):
         logger.info(f"[ArtistDetail] Loading 'Featured In' for {self.current_artist_id}")
-        if self._safe_sip_is_deleted(self.current_artist_id) or self._safe_sip_is_deleted(self.current_artist_data) or not self.current_artist_data.get('name'):
+        if not self.current_artist_id or not self.current_artist_data or not self.current_artist_data.get('name'):
             logger.warning("[ArtistDetail] Artist ID or name not available to load 'Featured In'.")
             if hasattr(self, 'featured_in_page') and self.featured_in_page:
                 scroll_area = self.featured_in_page.findChild(QScrollArea)
@@ -1227,6 +1358,9 @@ class ArtistDetailPage(QWidget):
                     playlists_data = [item for item in search_results if item.get('type') == 'playlist']
 
                     if playlists_data:
+                        # Cache the data for sorting
+                        self._featured_in_data_cache = playlists_data.copy()
+                        
                         # Use responsive grid for Featured In playlists
                         responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
                         
@@ -1347,7 +1481,9 @@ class ArtistDetailPage(QWidget):
         self.fan_count_label.setText("Loading...")
         self._set_artist_image_placeholder()
         # Clear any previous content when switching artists
-        self._clear_all_tabs()
+        # Only clear if tab content widgets are properly initialized
+        if hasattr(self, 'top_tracks_list_layout') and hasattr(self, 'albums_flow_layout'):
+            self._clear_all_tabs()
 
     def _clear_layout(self, layout):
         """Clear all items from a layout with better error handling.
@@ -1355,9 +1491,23 @@ class ArtistDetailPage(QWidget):
         if not layout:
             return
             
+        # Check if the layout object is still valid before trying to use it
+        try:
+            # Test if the layout is still accessible
+            _ = layout.count()
+        except RuntimeError as e:
+            if "wrapped C/C++ object" in str(e) or "has been deleted" in str(e):
+                logger.debug(f"[ArtistDetail._clear_layout] Layout already deleted, skipping clear")
+                return
+            else:
+                logger.error(f"[ArtistDetail._clear_layout] Unexpected RuntimeError: {e}")
+                return
+        except Exception as e:
+            logger.error(f"[ArtistDetail._clear_layout] Error accessing layout: {e}")
+            return
+            
         logger.debug(
-            f"[ArtistDetail._clear_layout] Clearing layout: {type(layout)}, id: {id(layout)}, "
-            f"sip_is_deleted (before clear): {self._safe_sip_is_deleted(layout)}"
+            f"[ArtistDetail._clear_layout] Clearing layout: {type(layout)}, id: {id(layout)}"
         )
         
         # Different clearing methods depending on layout type
@@ -1378,9 +1528,13 @@ class ArtistDetailPage(QWidget):
                 items_cleared += 1
                 
             logger.debug(
-                f"[ArtistDetail._clear_layout] Finished clearing layout: {type(layout)}, id: {id(layout)}, "
-                f"sip_is_deleted (after clear): {self._safe_sip_is_deleted(layout)}. Items cleared: {items_cleared}"
+                f"[ArtistDetail._clear_layout] Finished clearing layout: {type(layout)}, id: {id(layout)}. Items cleared: {items_cleared}"
             )
+        except RuntimeError as e:
+            if "wrapped C/C++ object" in str(e) or "has been deleted" in str(e):
+                logger.debug(f"[ArtistDetail._clear_layout] Layout was deleted during clearing")
+            else:
+                logger.error(f"[ArtistDetail._clear_layout] Unexpected RuntimeError during clear: {e}")
         except Exception as e:
             logger.error(f"[ArtistDetail._clear_layout] Error clearing layout: {e}")
             # If clearing failed, the layout might be damaged - safe to return
@@ -1397,6 +1551,12 @@ class ArtistDetailPage(QWidget):
         albums_page_layout = QVBoxLayout(self.albums_page)
         albums_page_layout.setContentsMargins(0,0,0,0)
         albums_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Add sort header for albums
+        self.albums_sort_header = AlbumSortHeader()
+        self.albums_sort_header.sort_requested.connect(lambda sort_by, ascending: self._handle_album_sort(sort_by, ascending, "albums"))
+        albums_page_layout.addWidget(self.albums_sort_header)
+        
         albums_scroll_area = ResponsiveScrollArea()
         albums_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         # Removed complex scroll event handling
@@ -1431,6 +1591,12 @@ class ArtistDetailPage(QWidget):
         singles_page_layout = QVBoxLayout(self.singles_page)
         singles_page_layout.setContentsMargins(0,0,0,0)
         singles_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Add sort header for singles
+        self.singles_sort_header = AlbumSortHeader()
+        self.singles_sort_header.sort_requested.connect(lambda sort_by, ascending: self._handle_album_sort(sort_by, ascending, "singles"))
+        singles_page_layout.addWidget(self.singles_sort_header)
+        
         singles_scroll_area = ResponsiveScrollArea()
         singles_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         # Removed complex scroll event handling
@@ -1465,6 +1631,12 @@ class ArtistDetailPage(QWidget):
         eps_page_layout = QVBoxLayout(self.eps_page)
         eps_page_layout.setContentsMargins(0,0,0,0)
         eps_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Add sort header for EPs
+        self.eps_sort_header = AlbumSortHeader()
+        self.eps_sort_header.sort_requested.connect(lambda sort_by, ascending: self._handle_album_sort(sort_by, ascending, "eps"))
+        eps_page_layout.addWidget(self.eps_sort_header)
+        
         eps_scroll_area = ResponsiveScrollArea()
         eps_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         # Removed complex scroll event handling
@@ -1499,6 +1671,12 @@ class ArtistDetailPage(QWidget):
         featured_in_page_layout = QVBoxLayout(self.featured_in_page)
         featured_in_page_layout.setContentsMargins(0,0,0,0)
         featured_in_page_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Add sort header for Featured In
+        self.featured_in_sort_header = AlbumSortHeader()
+        self.featured_in_sort_header.sort_requested.connect(lambda sort_by, ascending: self._handle_album_sort(sort_by, ascending, "featured_in"))
+        featured_in_page_layout.addWidget(self.featured_in_sort_header)
+        
         featured_in_scroll_area = ResponsiveScrollArea()
         featured_in_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         # Removed complex scroll event handling
@@ -1529,11 +1707,13 @@ class ArtistDetailPage(QWidget):
         featured_in_page_layout.addWidget(featured_in_scroll_area)
 
         # Clear existing widgets from stack before adding new ones
+        # Don't delete widgets immediately - just remove them from the stack
+        # Let Qt handle cleanup when they're no longer referenced
         while self.content_stack.count() > 0:
             widget = self.content_stack.widget(0)
             self.content_stack.removeWidget(widget)
-            if widget:
-                widget.deleteLater()
+            # Don't call deleteLater() here - it causes layout crashes
+            # The widgets will be cleaned up when the new ones are added
 
         self.content_stack.addWidget(self.top_tracks_page)
         self.content_stack.addWidget(self.albums_page)
@@ -1611,23 +1791,23 @@ class ArtistDetailPage(QWidget):
             return None
 
     def _safe_sip_is_deleted(self, obj):
-        """Safely check if a Qt object has been deleted, without raising exceptions.
-        Returns True if the object is None or deleted, False otherwise."""
+        """Safely check if a SIP object is deleted."""
         if obj is None:
             return True
-            
-        # Handle non-Qt objects (like integers)
-        if not isinstance(obj, (object,)) or not hasattr(obj, 'metaObject'):
-            return False
-            
         try:
-            return sip_is_deleted(obj)
-        except RuntimeError:
-            # Already deleted
+            # Try to access a basic attribute to check if object is still valid
+            if hasattr(obj, 'objectName'):
+                # Try to actually call a method to see if it's still valid
+                _ = obj.objectName()
+                return False
             return True
-        except Exception as e:
-            logger.debug(f"[ArtistDetail._safe_sip_is_deleted] Unexpected error: {e}")
-            return True  # If we can't verify, assume it's deleted to be safe
+        except RuntimeError as e:
+            # Check for specific Qt deletion errors
+            if "wrapped C/C++ object" in str(e) or "has been deleted" in str(e):
+                return True
+            return False
+        except Exception:
+            return True
 
     def _clear_all_tabs(self):
         """Clear content from all tabs."""
@@ -1642,24 +1822,54 @@ class ArtistDetailPage(QWidget):
             'featured_in': False
         }
         
-        # Clear Top Tracks
+        # Clear data caches
+        self._albums_data_cache = []
+        self._singles_data_cache = []
+        self._eps_data_cache = []
+        self._featured_in_data_cache = []
+        
+        # Clear Top Tracks - Use defensive clearing
         if hasattr(self, 'top_tracks_list_layout') and not self._safe_sip_is_deleted(self.top_tracks_list_layout):
-            self._clear_layout(self.top_tracks_list_layout)
-            loading_label = QLabel("Loading top tracks...")
-            loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.top_tracks_list_layout.addWidget(loading_label)
+            try:
+                self._clear_layout(self.top_tracks_list_layout)
+                # Only add loading label if the layout is still valid
+                try:
+                    loading_label = QLabel("Loading top tracks...")
+                    loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.top_tracks_list_layout.addWidget(loading_label)
+                except RuntimeError:
+                    # Layout was deleted, skip adding loading label
+                    pass
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing top tracks layout: {e}")
             
-        # Clear Albums
+        # Clear Albums - Use defensive clearing
         if hasattr(self, 'albums_flow_layout') and not self._safe_sip_is_deleted(self.albums_flow_layout):
-            self._clear_layout(self.albums_flow_layout)
+            try:
+                self._clear_layout(self.albums_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing albums layout: {e}")
             
-        # Clear Singles
+        # Clear Singles - Use defensive clearing
         if hasattr(self, 'singles_flow_layout') and not self._safe_sip_is_deleted(self.singles_flow_layout):
-            self._clear_layout(self.singles_flow_layout)
+            try:
+                self._clear_layout(self.singles_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing singles layout: {e}")
             
-        # Clear EPs
+        # Clear EPs - Use defensive clearing
         if hasattr(self, 'eps_flow_layout') and not self._safe_sip_is_deleted(self.eps_flow_layout):
-            self._clear_layout(self.eps_flow_layout)
+            try:
+                self._clear_layout(self.eps_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing eps layout: {e}")
+                
+        # Clear Featured In - Use defensive clearing
+        if hasattr(self, 'featured_in_flow_layout') and not self._safe_sip_is_deleted(self.featured_in_flow_layout):
+            try:
+                self._clear_layout(self.featured_in_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing featured in layout: {e}")
             
     async def _load_tab_content(self, tab_index):
         """Load content for the specified tab index."""

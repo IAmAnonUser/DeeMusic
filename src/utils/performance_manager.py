@@ -8,7 +8,7 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal, QRect, QPoint
 from PyQt6.QtWidgets import QWidget, QScrollArea, QAbstractScrollArea
 from PyQt6.QtGui import QPixmap
 
-from utils.image_cache_optimized import preload_images, OptimizedImageCache
+from src.utils.image_cache_optimized import preload_images, OptimizedImageCache
 
 logger = logging.getLogger(__name__)
 

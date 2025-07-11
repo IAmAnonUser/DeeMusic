@@ -4,7 +4,7 @@ import logging
 import re
 import requests
 from typing import Dict, List, Optional, Tuple
-from config_manager import ConfigManager
+from src.config_manager import ConfigManager
 
 try:
     import spotipy

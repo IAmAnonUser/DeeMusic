@@ -475,3 +475,63 @@ QFrame#VerticalSeparatorLine {
 }
 
 /* Download Queue specific styles will be loaded from download_queue.qss */ 
+
+/* Album Sort Header Styles */
+AlbumSortHeader {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+}
+
+QLabel#album_sort_label {
+    color: #495057;
+    font-weight: bold;
+    font-size: 9pt;
+}
+
+QComboBox#album_sort_combo {
+    background-color: #ffffff;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 9pt;
+    min-width: 100px;
+}
+
+QComboBox#album_sort_combo:hover {
+    border-color: #80bdff;
+}
+
+QComboBox#album_sort_combo:focus {
+    border-color: #80bdff;
+    outline: none;
+}
+
+QComboBox#album_sort_combo::drop-down {
+    border: none;
+    width: 20px;
+}
+
+QComboBox#album_sort_combo::down-arrow {
+    image: url(src/ui/assets/down_arrow.png);
+    width: 12px;
+    height: 12px;
+}
+
+QPushButton#album_sort_order_button {
+    background-color: #ffffff;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 9pt;
+    min-width: 80px;
+}
+
+QPushButton#album_sort_order_button:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+QPushButton#album_sort_order_button:pressed {
+    background-color: #dee2e6;
+    border-color: #6c757d;
+} 

@@ -19,8 +19,8 @@ import traceback
 from PyQt6.QtCore import QRunnable, QObject, pyqtSignal, QThreadPool
 import time
 # Corrected imports
-from config_manager import ConfigManager 
-from services.deezer_api import DeezerAPI # Assuming deezer_api.py is in the same 'services' package
+from src.config_manager import ConfigManager 
+from src.services.deezer_api import DeezerAPI # Assuming deezer_api.py is in the same 'services' package
 
 # Add crypto imports
 from Crypto.Hash import MD5
@@ -34,7 +34,7 @@ from mutagen.easyid3 import EasyID3
 from mutagen.flac import FLAC, Picture
 
 # Add lyrics utils import
-from utils.lyrics_utils import LyricsProcessor
+from src.utils.lyrics_utils import LyricsProcessor
 
 logger = logging.getLogger(__name__) # Initialize logger earlier
 

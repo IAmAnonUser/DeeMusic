@@ -19,7 +19,7 @@ from PyQt6.QtCore import QCoreApplication, QTimer
 from typing import Dict
 
 # Import MainWindow from the correct location
-from ui.main_window import MainWindow 
+from src.ui.main_window import MainWindow 
 
 # PRINT THE FILE PATH OF THE MODULE CONTAINING MainWindow
 import inspect
@@ -29,12 +29,12 @@ print(f"RUN.PY: MainWindow class is defined in module: {module_path}")
 # INTENTIONAL CRASH POINT FOR RUN.PY - REMOVED
 # raise Exception("BREAKPOINT_RUN_PY: If you see this, the LATEST run.py is running, AND MainWindow path was printed.")
 
-from config_manager import ConfigManager
-from services.deezer_api import DeezerAPI
-from services.download_manager import DownloadManager, is_valid_arl
-from ui.settings_dialog import SettingsDialog
+from src.config_manager import ConfigManager
+from src.services.deezer_api import DeezerAPI
+from src.services.download_manager import DownloadManager, is_valid_arl
+from src.ui.settings_dialog import SettingsDialog
 # Import image cache utilities
-from utils.image_cache import clean_cache
+from src.utils.image_cache import clean_cache
 
 # Set up basic logging for run.py
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')

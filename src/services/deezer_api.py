@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Any
 import deezer  # Import the deezer-python module correctly
 from pathlib import Path
 from yarl import URL
-from config_manager import ConfigManager
+from src.config_manager import ConfigManager
 import random
 
 logger = logging.getLogger(__name__)

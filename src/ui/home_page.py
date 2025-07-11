@@ -11,7 +11,7 @@ import os
 import logging
 
 # Import SearchResultCard from ui.search_widget
-from ui.search_widget import SearchResultCard
+from src.ui.search_widget import SearchResultCard
 
 logger = logging.getLogger(__name__)
 

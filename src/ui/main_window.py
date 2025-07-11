@@ -27,11 +27,11 @@ from .playlist_detail_page import PlaylistDetailPage # Added import
 from .album_detail_page import AlbumDetailPage # Import AlbumDetailPage
 from .artist_detail_page import ArtistDetailPage # Import ArtistDetailPage
 from .download_queue_widget import DownloadQueueWidget # ADDED: Import DownloadQueueWidget
-from config_manager import ConfigManager
-from services.deezer_api import DeezerAPI
-from services.download_manager import DownloadManager
-from services.music_player import MusicPlayer, DummyMusicPlayer
-from services.queue_manager import QueueManager, Track, DummyQueueManager
+from src.config_manager import ConfigManager
+from src.services.deezer_api import DeezerAPI
+from src.services.download_manager import DownloadManager
+from src.services.music_player import MusicPlayer, DummyMusicPlayer
+from src.services.queue_manager import QueueManager, Track, DummyQueueManager
 import logging
 import os
 import asyncio 

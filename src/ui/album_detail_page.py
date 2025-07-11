@@ -20,8 +20,8 @@ import asyncio
 # Import SearchResultCard
 from src.ui.search_widget import SearchResultCard
 from src.ui.track_list_header_widget import TrackListHeaderWidget # ADDED
-from utils.image_cache import get_image_from_cache, save_image_to_cache # For main album cover
-from utils.icon_utils import get_icon # ADDED
+from src.utils.image_cache import get_image_from_cache, save_image_to_cache # For main album cover
+from src.utils.icon_utils import get_icon # ADDED
 
 logger = logging.getLogger(__name__)
 

@@ -9,8 +9,8 @@ from PyQt6.QtWidgets import (
     QSpinBox, QFileDialog, QMessageBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from ui.folder_settings_dialog import FolderSettingsDialog
-from config_manager import ConfigManager
+from src.ui.folder_settings_dialog import FolderSettingsDialog
+from src.config_manager import ConfigManager
 from .theme_manager import ThemeManager
 import logging
 from typing import Dict, Any

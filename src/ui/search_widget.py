@@ -15,18 +15,19 @@ import asyncio
 import requests 
 from io import BytesIO
 # Use absolute imports
-from services.deezer_api import DeezerAPI
-from services.download_manager import DownloadManager
-from services.spotify_api import SpotifyAPI
-from services.playlist_converter import PlaylistConverter
+from src.services.deezer_api import DeezerAPI
+from src.services.download_manager import DownloadManager
+from src.services.spotify_api import SpotifyAPI
+from src.services.playlist_converter import PlaylistConverter
+from src.utils.image_cache_optimized import OptimizedImageCache
 import logging
 import os
 from PyQt6.sip import isdeleted as sip_is_deleted # Added import
 
 # Import the new caching utility
-from utils.image_cache import get_image_from_cache, save_image_to_cache
-from utils.icon_utils import get_icon # ADD THIS IMPORT
-from ui.components.responsive_grid import ResponsiveGridWidget
+from src.utils.image_cache import get_image_from_cache, save_image_to_cache
+from src.utils.icon_utils import get_icon # ADD THIS IMPORT
+from src.ui.components.responsive_grid import ResponsiveGridWidget
 from .track_list_header_widget import TrackListHeaderWidget
 
 # Add this global semaphore to limit concurrent downloads
