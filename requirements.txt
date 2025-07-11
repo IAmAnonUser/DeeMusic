@@ -14,7 +14,7 @@ python-dotenv>=1.0.0
 watchdog>=3.0.0
 
 # Network and Download
-aiohttp==3.9.5
+aiohttp==3.10.5
 tqdm>=4.65.0
 requests==2.32.3
 urllib3==1.26.18

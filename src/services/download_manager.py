@@ -519,7 +519,7 @@ class DownloadWorker(QRunnable):
             
             # Add debug logging for playlist position in placeholders
             if self.item_type == 'playlist_track':
-                logger.debug(f"PLAYLIST POSITION: Final track_num_int={track_num_int}, playlist_position={track_info.get('playlist_position')}")
+                logger.debug(f"PLAYLIST TEMPLATE DEBUG: track_number={track_num_int}, playlist_position={track_info.get('playlist_position')}")
             
             # Placeholder dictionary, including playlist_name
             placeholders = {
@@ -771,12 +771,12 @@ class DownloadWorker(QRunnable):
             try:
                 if encrypted_temp_path and encrypted_temp_path.exists():
                     encrypted_temp_path.unlink()
-                # decrypted_path is now a Path object, not a temp path variable
+                # decrypted_temp_path is now a Path object, not a temp path variable
                 # The cleanup here is mainly for error cases since success path cleans up above
             except:
                 pass
 
-    def _apply_metadata(self, file_path: str, track_info: dict, target_directory: Path = None):
+    def _apply_metadata(self, file_path: str, track_info: dict, target_directory: Optional[Path] = None):
         """Apply metadata to the downloaded audio file."""
         try:
             # Import mutagen here to avoid potential loading issues elsewhere
@@ -788,10 +788,8 @@ class DownloadWorker(QRunnable):
             
             logger.debug(f"Applying metadata to {file_path} with track_info: {track_info.keys()}")
             
-            # Determine file type based on quality setting rather than file extension
-            # since temporary files have .tmp extension
-            quality = self.download_manager.quality  # Use cached quality setting for consistency
-            is_mp3 = quality.startswith('MP3_') or quality == 'AAC_64'  # AAC is also handled like MP3
+            quality = self.download_manager.quality
+            is_mp3 = quality.startswith('MP3_') or quality == 'AAC_64'
             
             if is_mp3:
                 try:
@@ -812,230 +810,147 @@ class DownloadWorker(QRunnable):
                 logger.error(f"Audio object is None after loading attempt for {file_path}")
                 return
 
-            # --- Map track_info to tags --- 
-            # Use .get() with fallbacks to avoid KeyErrors
             title = track_info.get('title', 'Unknown Title')
             
-            # Construct track artist name (with collaboration if multiple artists) - same logic as in path preparation
             primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
             artists_array = track_info.get('artists', [])
             
             if len(artists_array) > 1:
-                # Multiple artists - build collaborative name
                 all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
                 if len(all_artist_names) > 1:
-                    # Use primary artist + "feat." + other artists
-                    other_artists = all_artist_names[1:]  # Skip first (primary) artist
+                    other_artists = all_artist_names[1:]
                     if len(other_artists) == 1:
                         artist = f"{all_artist_names[0]} feat. {other_artists[0]}"
                     else:
                         artist = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
-                    logger.debug(f"METADATA ARTIST DEBUG: Constructed collaborative artist name: '{artist}' from {all_artist_names}")
                 else:
                     artist = primary_artist
-                    logger.debug(f"METADATA ARTIST DEBUG: Using primary artist (insufficient artist data): '{artist}'")
             else:
-                # Single artist
                 artist = primary_artist
-                logger.debug(f"METADATA ARTIST DEBUG: Using single artist: '{artist}'")
             
-            # --- Check for alb_title first for metadata too --- 
             album = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
             
-            # Get initial track number from track_info
             track_num_int = track_info.get('track_number', track_info.get('track_position', 0))
             
-            # For playlist tracks, use playlist position instead of original track number
             if self.item_type == 'playlist_track':
                 playlist_pos = track_info.get('playlist_position')
                 if playlist_pos is not None:
                     track_num_int = int(playlist_pos)
-                    logger.debug(f"METADATA: Using playlist position {track_num_int} for playlist track metadata")
-                else:
-                    logger.warning(f"METADATA: No playlist position found for playlist track, using original track number {track_num_int}")
             
             track_num_str = str(track_num_int).zfill(2)
             total_tracks_str = str(track_info.get('album', {}).get('nb_tracks', 0))
             disc_num_str = str(track_info.get('disk_number', 1))
-            total_discs_str = "1" # Deezer API doesn't seem to provide total discs easily?
-            # Use get method for release_date as well
-            release_date = track_info.get('release_date', '1970-01-01') # YYYY-MM-DD
+            total_discs_str = "1"
+            release_date = track_info.get('release_date', '1970-01-01')
             genre_data = track_info.get('genres', {}).get('data', [])
             genre = genre_data[0].get('name', None) if genre_data else None
-            composer = track_info.get('composer', None) # Deezer often lacks composer
-            
-            publisher = track_info.get('label', track_info.get('record_label')) # Check alternative keys
+            composer = track_info.get('composer', None)
+            publisher = track_info.get('label', track_info.get('record_label'))
             isrc = track_info.get('isrc', None)
-            
-            # Album Artist logic based on user configuration (uses primary artist)
             album_artist = self._get_album_artist(track_info, primary_artist)
 
-            # --- Apply tags ---
             if is_mp3:
-                # For MP3, work with the existing tags object or create if needed
                 tags = audio.tags
-                if tags is None: # Should have been added above, but double-check
+                if tags is None:
                      tags = ID3()
                      audio.tags = tags
                 
-                # Clear specific frames before adding to avoid duplicates (safer than full delete)
-                tags.delall("TIT2") # Title
-                tags.delall("TPE1") # Artist
-                tags.delall("TALB") # Album
-                tags.delall("TRCK") # Track Number
-                tags.delall("TPOS") # Disc Number
-                tags.delall("TDRC") # Recording Date (Year)
-                tags.delall("TPE2") # Album Artist
-                tags.delall("TCON") # Genre
-                tags.delall("TCOM") # Composer
-                tags.delall("TPUB") # Publisher
-                tags.delall("TSRC") # ISRC
-                tags.delall("APIC") # Picture
+                tags.delall("TIT2"); tags.delall("TPE1"); tags.delall("TALB"); tags.delall("TRCK"); tags.delall("TPOS"); tags.delall("TDRC"); tags.delall("TPE2"); tags.delall("TCON"); tags.delall("TCOM"); tags.delall("TPUB"); tags.delall("TSRC"); tags.delall("APIC")
 
                 tags.add(TIT2(encoding=3, text=title))
                 tags.add(TPE1(encoding=3, text=artist))
                 tags.add(TALB(encoding=3, text=album))
                 
-                # Track number: only add total if known and > 0
                 if total_tracks_str and int(total_tracks_str) > 0:
                     tags.add(TRCK(encoding=3, text=f"{track_num_str}/{total_tracks_str}"))
                 else:
                     tags.add(TRCK(encoding=3, text=track_num_str))
 
-                # Disc number: only add total if it's known and different from '1' (our hardcoded default)
-                if total_discs_str and total_discs_str != "0" and total_discs_str != "1": # Crude check for now
+                if total_discs_str and total_discs_str != "0" and total_discs_str != "1":
                     tags.add(TPOS(encoding=3, text=f"{disc_num_str}/{total_discs_str}"))
                 else:
                     tags.add(TPOS(encoding=3, text=disc_num_str))
                     
-                if release_date and len(release_date) >= 4: # Ensure we have at least year
-                     tags.add(TDRC(encoding=3, text=release_date[:4])) # Year only for TDRC
+                if release_date and len(release_date) >= 4:
+                     tags.add(TDRC(encoding=3, text=release_date[:4]))
                 tags.add(TPE2(encoding=3, text=album_artist))
                 if genre: tags.add(TCON(encoding=3, text=genre))
                 if composer: tags.add(TCOM(encoding=3, text=composer))
                 if publisher: tags.add(TPUB(encoding=3, text=publisher))
                 if isrc: tags.add(TSRC(encoding=3, text=isrc))
-            else: # FLAC - Vorbis Comments
-                # Clear existing comments first (optional but recommended)
+            else: # FLAC
                 audio.delete() 
-                tags = audio # Use the audio object directly for Vorbis comments
+                tags = audio
 
                 tags['title'] = title
                 tags['artist'] = artist
                 tags['album'] = album
                 tags['tracknumber'] = track_num_str
-                # Only add tracktotal if known and > 0
                 if total_tracks_str and int(total_tracks_str) > 0:
                     tags['tracktotal'] = total_tracks_str
                 else:
-                    if 'tracktotal' in tags: # Remove if it exists from a previous run or default
-                        del tags['tracktotal']
+                    if 'tracktotal' in tags: del tags['tracktotal']
                         
                 tags['discnumber'] = disc_num_str
-                # Only add disctotal if known and different from '1'
                 if total_discs_str and total_discs_str != "0" and total_discs_str != "1":
                     tags['disctotal'] = total_discs_str
                 else:
-                    if 'disctotal' in tags: # Remove if it exists
-                        del tags['disctotal']
+                    if 'disctotal' in tags: del tags['disctotal']
 
-                tags['date'] = release_date # YYYY-MM-DD
+                tags['date'] = release_date
                 tags['albumartist'] = album_artist
                 if genre: tags['genre'] = genre
                 if composer: tags['composer'] = composer
-                if publisher: tags['organization'] = publisher # Or 'label'? Let's stick to ORGANIZATION
+                if publisher: tags['organization'] = publisher
                 if isrc: tags['isrc'] = isrc
 
-            # --- Embed Cover Art --- 
-            # Read relevant settings
             config = self.download_manager.config
-            embed_artwork_enabled = config.get_setting('downloads.embed_artwork', True) # Default to True
-            artwork_size = config.get_setting('downloads.embeddedArtworkSize', 1000) # Default to 1000
-            logger.debug(f"Artwork settings: Embed={embed_artwork_enabled}, Size={artwork_size}")
+            embed_artwork_enabled = config.get_setting('downloads.embed_artwork', True)
+            artwork_size = config.get_setting('downloads.embeddedArtworkSize', 1000)
 
             if embed_artwork_enabled:
                 cover_url = None
-                image_data = None # Define image_data here
-                # Prefer public API structure first if available
+                image_data = None
                 if 'album' in track_info and isinstance(track_info['album'], dict):
-                     # Construct size-specific keys based on setting
-                     size_str = f"{artwork_size}x{artwork_size}"
-                     public_api_size_keys = {
-                          1000: 'cover_xl',
-                          500: 'cover_big', # Approximate, Deezer uses 500x500 for big
-                          250: 'cover_medium', # Approximate, Deezer uses 250x250 for medium
-                          # Add more sizes if needed and if Deezer provides corresponding keys
-                     }
-                     # Find the best available key <= desired size 
-                     # (Simplistic: try exact size key first, fallback needed)
-                     # TODO: Implement better fallback logic if exact size key doesn't exist
                      key_to_try = None
-                     if artwork_size == 1000: key_to_try = 'cover_xl'
-                     elif artwork_size >= 500: key_to_try = 'cover_big' # Fallback if 1000 unavailable or size < 1000
+                     if artwork_size >= 1000: key_to_try = 'cover_xl'
+                     elif artwork_size >= 500: key_to_try = 'cover_big'
                      elif artwork_size >= 250: key_to_try = 'cover_medium'
-                     # else: use default small? 
                      
                      if key_to_try and key_to_try in track_info['album']:
                           cover_url = track_info['album'].get(key_to_try)
-                          logger.debug(f"Found public API cover URL using key '{key_to_try}': {cover_url}")
-                     else:
-                          logger.debug(f"Public API keys ('{key_to_try}') not found for desired size {artwork_size}, will try private API structure.")
 
-                # Fallback for private API structure if public URL wasn't found or album structure is different
                 if not cover_url and 'alb_picture' in track_info:
                      cover_md5 = track_info.get('alb_picture')
                      if cover_md5:
-                          # Construct URL with desired size
                           size_str = f"{artwork_size}x{artwork_size}"
                           cover_url = f"https://e-cdns-images.dzcdn.net/images/cover/{cover_md5}/{size_str}-000000-80-0-0.jpg"
-                          logger.debug(f"Constructed private API cover URL with size {artwork_size}: {cover_url}")
-                     else:
-                          logger.debug("Private API alb_picture key not found.")
-                elif not cover_url:
-                     logger.warning(f"Could not determine cover URL from either public or private API structures for track {track_info.get('id')}")
-                     cover_url = None # Ensure it's None if logic fails
-
+                
                 if cover_url:
-                     logger.debug(f"Attempting to fetch cover art from {cover_url}")
                      try:
                          cover_response = requests.get(cover_url, timeout=15)
                          cover_response.raise_for_status()
-                         image_data = cover_response.content # Store fetched data
-                         mime_type = cover_response.headers.get('Content-Type', 'image/jpeg') # Default to jpeg if not specified
+                         image_data = cover_response.content
+                         mime_type = cover_response.headers.get('Content-Type', 'image/jpeg')
 
                          if is_mp3:
-                             audio.tags.add( # Add directly to the tags object
-                                 APIC(
-                                     encoding=3, # 3 is UTF-8
-                                     mime=mime_type,
-                                     type=3, # 3 means cover (front)
-                                     desc='Cover',
-                                     data=image_data
-                                 )
+                             audio.tags.add(
+                                 APIC(encoding=3, mime=mime_type, type=3, desc='Cover', data=image_data)
                              )
                          else: # FLAC
                                  picture = Picture()
                                  picture.data = image_data
-                                 picture.type = 3 # Cover (front)
+                                 picture.type = 3
                                  picture.mime = mime_type
                                  audio.add_picture(picture)
-                             
-                         logger.debug("Successfully prepared cover art for embedding.")
                      except requests.exceptions.RequestException as img_err:
                          logger.warning(f"Failed to download cover art from {cover_url}: {img_err}")
                      except Exception as embed_err:
                           logger.warning(f"Failed to create mutagen picture object: {embed_err}")
-                else:
-                     logger.debug("No cover URL available for artwork embedding.")
 
-            # --- Save Separate Artwork Files ---
             save_artwork_enabled = config.get_setting('downloads.saveArtwork', True)
-            logger.debug(f"Checking separate artwork saving: saveArtwork={save_artwork_enabled}")
             
             if save_artwork_enabled:
-                logger.debug("Saving separate artwork files to disk...")
-                
-                # Get artwork settings using correct setting names from user's config
                 album_artwork_size = config.get_setting('downloads.albumArtworkSize', 1000)
                 artist_artwork_size = config.get_setting('downloads.artistArtworkSize', 1200)
                 album_image_template = config.get_setting('downloads.albumImageTemplate', 'cover')
@@ -1043,15 +958,9 @@ class DownloadWorker(QRunnable):
                 album_image_format = config.get_setting('downloads.albumImageFormat', 'jpg')
                 artist_image_format = config.get_setting('downloads.artistImageFormat', 'jpg')
                 
-                logger.debug(f"Artwork settings: Album={album_artwork_size}px, Artist={artist_artwork_size}px, AlbumTemplate={album_image_template}, ArtistTemplate={artist_image_template}")
-                
-                # Save album cover to album directory
                 try:
                     album_cover_url = None
-                    
-                    # Get album cover URL (prefer higher quality for file saving)
                     if 'album' in track_info and isinstance(track_info['album'], dict):
-                        # Try to get the best quality cover
                         if album_artwork_size >= 1000 and 'cover_xl' in track_info['album']:
                             album_cover_url = track_info['album']['cover_xl']
                         elif album_artwork_size >= 500 and 'cover_big' in track_info['album']:
@@ -1059,7 +968,6 @@ class DownloadWorker(QRunnable):
                         elif 'cover_medium' in track_info['album']:
                             album_cover_url = track_info['album']['cover_medium']
                     
-                    # Fallback to private API structure
                     if not album_cover_url and 'alb_picture' in track_info:
                         cover_md5 = track_info.get('alb_picture')
                         if cover_md5:
@@ -1067,71 +975,47 @@ class DownloadWorker(QRunnable):
                             album_cover_url = f"https://e-cdns-images.dzcdn.net/images/cover/{cover_md5}/{size_str}-000000-80-0-0.jpg"
                     
                     if album_cover_url:
-                        # Use the provided target directory instead of recalculating
                         if target_directory:
                             album_dir = target_directory
                         else:
-                            # Fallback: recalculate directory structure (shouldn't happen normally)
-                        folder_conf = config.get_setting('downloads.folder_structure', {})
-                        create_artist_folder = folder_conf.get('create_artist_folders', True)
-                        create_album_folder = folder_conf.get('create_album_folders', True)
-                        
-                        download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
-                        album_dir = Path(download_base)
-                        
-                        if create_artist_folder:
-                                # Construct track artist name (with collaboration if multiple artists)
-                                primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
-                                artists_array = track_info.get('artists', [])
-                                
-                                if len(artists_array) > 1:
-                                    all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
-                                    if len(all_artist_names) > 1:
-                                        other_artists = all_artist_names[1:]
-                                        if len(other_artists) == 1:
-                                            artist_name = f"{all_artist_names[0]} feat. {other_artists[0]}"
-                                        else:
-                                            artist_name = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
+                            folder_conf = config.get_setting('downloads.folder_structure', {})
+                            create_artist_folder = folder_conf.get('create_artist_folders', True)
+                            create_album_folder = folder_conf.get('create_album_folders', True)
+                            download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
+                            album_dir = Path(download_base)
+                            if create_artist_folder:
+                                primary_artist_name = track_info.get('artist', {}).get('name', 'Unknown Artist')
+                                artists_list = track_info.get('artists', [])
+                                if len(artists_list) > 1:
+                                    all_names = [a.get('ART_NAME', '') for a in artists_list if a.get('ART_NAME')]
+                                    if len(all_names) > 1:
+                                        other_names = all_names[1:]
+                                        artist_name_str = f"{all_names[0]} feat. {', '.join(other_names)}" if len(other_names) > 1 else f"{all_names[0]} feat. {other_names[0]}"
                                     else:
-                                        artist_name = primary_artist
+                                        artist_name_str = primary_artist_name
                                 else:
-                                    artist_name = primary_artist
-                                
-                            safe_artist = self.download_manager._sanitize_filename(artist_name)
-                            album_dir = album_dir / safe_artist
-                            
-                        if create_album_folder:
-                            album_name = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
-                            safe_album = self.download_manager._sanitize_filename(album_name)
-                            album_dir = album_dir / safe_album
+                                    artist_name_str = primary_artist_name
+                                safe_artist_name = self.download_manager._sanitize_filename(artist_name_str)
+                                album_dir = album_dir / safe_artist_name
+                            if create_album_folder:
+                                album_name_str = track_info.get('alb_title', track_info.get('album', {}).get('title', 'Unknown Album'))
+                                safe_album_name = self.download_manager._sanitize_filename(album_name_str)
+                                album_dir = album_dir / safe_album_name
                         
                         album_cover_filename = f"{album_image_template}.{album_image_format}"
                         album_cover_path = album_dir / album_cover_filename
                         
-                        # Only download if file doesn't exist
                         if not album_cover_path.exists():
-                            logger.debug(f"Downloading album cover to {album_cover_path}")
                             cover_response = requests.get(album_cover_url, timeout=15)
                             cover_response.raise_for_status()
-                            
-                            with open(album_cover_path, 'wb') as f:
-                                f.write(cover_response.content)
+                            with open(album_cover_path, 'wb') as f: f.write(cover_response.content)
                             logger.info(f"Album cover saved to {album_cover_path}")
-                        else:
-                            logger.debug(f"Album cover already exists at {album_cover_path}")
-                    else:
-                        logger.debug("No album cover URL available for separate file saving")
-                        
                 except Exception as album_cover_err:
                     logger.warning(f"Failed to save album cover: {album_cover_err}")
                 
-                # Save artist image to artist directory
                 try:
                     artist_image_url = None
-                    
-                    # Get artist image URL
                     if 'artist' in track_info and isinstance(track_info['artist'], dict):
-                        # Try to get the best quality artist image
                         if artist_artwork_size >= 1000 and 'picture_xl' in track_info['artist']:
                             artist_image_url = track_info['artist']['picture_xl']
                         elif artist_artwork_size >= 500 and 'picture_big' in track_info['artist']:
@@ -1139,7 +1023,6 @@ class DownloadWorker(QRunnable):
                         elif 'picture_medium' in track_info['artist']:
                             artist_image_url = track_info['artist']['picture_medium']
                     
-                    # Fallback to private API structure using art_picture
                     if not artist_image_url and 'art_picture' in track_info:
                         artist_md5 = track_info.get('art_picture')
                         if artist_md5:
@@ -1147,89 +1030,48 @@ class DownloadWorker(QRunnable):
                             artist_image_url = f"https://e-cdns-images.dzcdn.net/images/artist/{artist_md5}/{size_str}-000000-80-0-0.jpg"
                     
                     if artist_image_url:
-                        # Determine artist directory - use target_directory and go up if needed
+                        artist_dir = None
                         if target_directory:
-                        folder_conf = config.get_setting('downloads.folder_structure', {})
-                        create_artist_folder = folder_conf.get('create_artist_folders', True)
-                        create_album_folder = folder_conf.get('create_album_folders', True)
-                        
-                            if create_artist_folder:
-                                if create_album_folder:
-                                    # If we have artist/album structure, artist dir is parent of target
-                                    artist_dir = target_directory.parent
-                                else:
-                                    # If only artist folder, target dir is the artist dir
-                                    artist_dir = target_directory
-                            else:
-                                # No artist folder structure, skip artist image
-                                logger.debug("Artist folders disabled, skipping artist image save")
-                                artist_dir = None
-                        else:
-                            # Fallback: recalculate directory structure (shouldn't happen normally)
                             folder_conf = config.get_setting('downloads.folder_structure', {})
                             create_artist_folder = folder_conf.get('create_artist_folders', True)
-                            
-                        download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
-                        
-                        if create_artist_folder:
-                                # Construct track artist name (with collaboration if multiple artists)
-                                primary_artist = track_info.get('artist', {}).get('name', 'Unknown Artist')
-                                artists_array = track_info.get('artists', [])
-                                
-                                if len(artists_array) > 1:
-                                    all_artist_names = [a.get('ART_NAME', '') for a in artists_array if a.get('ART_NAME')]
-                                    if len(all_artist_names) > 1:
-                                        other_artists = all_artist_names[1:]
-                                        if len(other_artists) == 1:
-                                            artist_name = f"{all_artist_names[0]} feat. {other_artists[0]}"
-                                        else:
-                                            artist_name = f"{all_artist_names[0]} feat. {', '.join(other_artists)}"
-                                    else:
-                                        artist_name = primary_artist
-                                else:
-                                    artist_name = primary_artist
-                                
-                            safe_artist = self.download_manager._sanitize_filename(artist_name)
-                            artist_dir = Path(download_base) / safe_artist
+                            create_album_folder = folder_conf.get('create_album_folders', True)
+                            if create_artist_folder:
+                                artist_dir = target_directory.parent if create_album_folder else target_directory
                         else:
-                            # No artist folder structure, skip artist image
-                            logger.debug("Artist folders disabled, skipping artist image save")
-                            artist_dir = None
+                            folder_conf = config.get_setting('downloads.folder_structure', {})
+                            create_artist_folder = folder_conf.get('create_artist_folders', True)
+                            if create_artist_folder:
+                                download_base = config.get_setting('downloads.path', str(Path.home() / 'Downloads'))
+                                primary_artist_name = track_info.get('artist', {}).get('name', 'Unknown Artist')
+                                artists_list = track_info.get('artists', [])
+                                if len(artists_list) > 1:
+                                    all_names = [a.get('ART_NAME', '') for a in artists_list if a.get('ART_NAME')]
+                                    if len(all_names) > 1:
+                                        other_names = all_names[1:]
+                                        artist_name_str = f"{all_names[0]} feat. {', '.join(other_names)}" if len(other_names) > 1 else f"{all_names[0]} feat. {other_names[0]}"
+                                    else:
+                                        artist_name_str = primary_artist_name
+                                else:
+                                    artist_name_str = primary_artist_name
+                                safe_artist_name = self.download_manager._sanitize_filename(artist_name_str)
+                                artist_dir = Path(download_base) / safe_artist_name
                         
                         if artist_dir:
                             artist_image_filename = f"{artist_image_template}.{artist_image_format}"
                             artist_image_path = artist_dir / artist_image_filename
-                            
-                            # Only download if file doesn't exist
                             if not artist_image_path.exists():
-                                logger.debug(f"Downloading artist image to {artist_image_path}")
                                 artist_response = requests.get(artist_image_url, timeout=15)
                                 artist_response.raise_for_status()
-                                
-                                with open(artist_image_path, 'wb') as f:
-                                    f.write(artist_response.content)
+                                with open(artist_image_path, 'wb') as f: f.write(artist_response.content)
                                 logger.info(f"Artist image saved to {artist_image_path}")
-                            else:
-                                logger.debug(f"Artist image already exists at {artist_image_path}")
-                    else:
-                        logger.debug("No artist image URL available for separate file saving")
-                        
                 except Exception as artist_image_err:
                     logger.warning(f"Failed to save artist image: {artist_image_err}")
-            else:
-                logger.debug("Separate artwork saving is disabled")
 
-            # --- Process and Save Lyrics ---
-            logger.info(f"[DEBUG] About to process lyrics for track {track_info.get('id', 'unknown')}")
             try:
-                # Fetch and embed lyrics into the audio file
                 self._process_and_save_lyrics(track_info, str(file_path), is_mp3, audio)
-                logger.info(f"[DEBUG] Lyrics processing completed for track {track_info.get('id', 'unknown')}")
             except Exception as lyrics_exc:
                 logger.warning(f"Lyrics processing failed: {lyrics_exc}")
-                # Continue - lyrics failure shouldn't fail the metadata application
 
-            # Save the file
             audio.save()
             logger.debug(f"Metadata and artwork successfully applied to {file_path}")
             
@@ -2114,14 +1956,16 @@ if __name__ == '__main__':
         
     deezer_api = DummyDeezerAPI()
 
-    download_manager = DownloadManager(config_manager, deezer_api)
+    download_manager = DownloadManager(config_manager, deezer_api) # type: ignore
 
     # Test queueing a download (requires a running Qt event loop to see signals)
     print("Testing track download queuing...")
     download_manager.download_track(62724015) # Example track ID
     
     print("Testing album download queuing...")
-    download_manager.download_album(302127, [62724015]) # Example album ID (Thriller) with track
+    # This is an async function and should be awaited in an async context
+    # For a simple script test, we can use asyncio.run()
+    # asyncio.run(download_manager.download_album(302127, [62724015])) # Example album ID (Thriller) with track
 
     print("Downloads queued. Check logs. Need event loop (e.g., QApplication) to run workers.")
     

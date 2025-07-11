@@ -224,6 +224,8 @@ class ArtistDetailPage(QWidget):
         
         # Add track list header (like other detail pages)
         self.top_tracks_header = TrackListHeaderWidget(self)
+        # Connect to sorting signals
+        self.top_tracks_header.sort_requested.connect(self._handle_track_sort)
         layout.addWidget(self.top_tracks_header)
         
         # Add a scroll area for the list of tracks
@@ -231,7 +233,7 @@ class ArtistDetailPage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         
-        # Removed complex scroll event handling that was causing performance issues
+        # Removed complex scroll event handling
         
         # Content widget to hold the track list
         content = QWidget()
@@ -242,6 +244,9 @@ class ArtistDetailPage(QWidget):
         self.top_tracks_list_layout.setContentsMargins(0, 5, 0, 5)
         self.top_tracks_list_layout.setSpacing(5)
         self.top_tracks_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        
+        # Store original tracks data for sorting
+        self.original_tracks_data = []
         
         # Add a placeholder/loading message
         loading_label = QLabel("Loading top tracks...")
@@ -589,6 +594,8 @@ class ArtistDetailPage(QWidget):
             self._clear_layout(self.top_tracks_list_layout) # Clear loading label
 
             if tracks:
+                # Store original tracks data for sorting
+                self.original_tracks_data = []
                 for track_data in tracks:
                     if not isinstance(track_data, dict):
                         logger.warning(f"[ArtistDetail.load_top_tracks] Skipping non-dict track item: {track_data}")
@@ -596,19 +603,69 @@ class ArtistDetailPage(QWidget):
                     # Ensure 'type' is set if not present, SearchResultCard might expect it
                     if 'type' not in track_data:
                         track_data['type'] = 'track' 
-                        
-                    card = SearchResultCard(track_data, show_duration=True) # MODIFIED: show_duration=True
-                    card.card_selected.connect(self.track_selected_for_playback.emit)
-                    card.download_clicked.connect(self.track_selected_for_download.emit)
-                    # NEW: Connect artist and album name click signals
-                    card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
-                    card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
-                    self.top_tracks_list_layout.addWidget(card)
+                    self.original_tracks_data.append(track_data)
+                
+                # Display tracks with duration
+                self._display_tracks(self.original_tracks_data)
             else:
                 self._show_error_in_layout(self.top_tracks_list_layout, "No top tracks found for this artist.")
         except Exception as e:
             logger.error(f"[ArtistDetail.load_top_tracks] Error loading top tracks: {e}", exc_info=True)
             self._show_error_in_layout(self.top_tracks_list_layout, f"Error loading top tracks: {e}")
+
+    def _display_tracks(self, tracks_data):
+        """Display tracks in the track list layout."""
+        self._clear_layout(self.top_tracks_list_layout)
+        
+        for track_data in tracks_data:
+            card = SearchResultCard(track_data, show_duration=True) # IMPORTANT: show_duration=True
+            card.card_selected.connect(self.track_selected_for_playback.emit)
+            card.download_clicked.connect(self.track_selected_for_download.emit)
+            # NEW: Connect artist and album name click signals
+            card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
+            card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
+            self.top_tracks_list_layout.addWidget(card)
+
+    def _handle_track_sort(self, column_name: str, ascending: bool):
+        """Handle sorting request for tracks."""
+        logger.info(f"[ArtistDetail] Sorting tracks by {column_name}, ascending: {ascending}")
+        
+        if not hasattr(self, 'original_tracks_data') or not self.original_tracks_data:
+            logger.warning("[ArtistDetail] No tracks data available for sorting")
+            return
+            
+        # Sort the tracks
+        sorted_tracks = self._sort_tracks_by(self.original_tracks_data, column_name, ascending)
+        
+        # Display sorted tracks
+        self._display_tracks(sorted_tracks)
+
+    def _sort_tracks_by(self, tracks_data, column_name: str, ascending: bool):
+        """Sort tracks by the specified column."""
+        def get_sort_key(track):
+            if column_name == "title":
+                return track.get('title', '').lower()
+            elif column_name == "artist":
+                artist_data = track.get('artist', {})
+                if isinstance(artist_data, dict):
+                    return artist_data.get('name', '').lower()
+                return ''
+            elif column_name == "album":
+                album_data = track.get('album', {})
+                if isinstance(album_data, dict):
+                    return album_data.get('title', '').lower()
+                return ''
+            elif column_name == "duration":
+                return track.get('duration', 0)
+            else:
+                return ''
+        
+        try:
+            sorted_tracks = sorted(tracks_data, key=get_sort_key, reverse=not ascending)
+            return sorted_tracks
+        except Exception as e:
+            logger.error(f"[ArtistDetail] Error sorting tracks: {e}")
+            return tracks_data  # Return original data if sorting fails
 
     def _show_error_in_layout(self, layout, message): # Helper to show errors in a given layout
         self._clear_layout(layout)

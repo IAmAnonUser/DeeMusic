@@ -38,7 +38,7 @@ def check_prerequisites():
         "dist/DeeMusic.exe",
         "src/ui/assets/logo.ico",
         "README.md",
-        "installer.iss"
+        "tools/installer.iss"
     ]
     
     missing_files = []
@@ -95,7 +95,7 @@ def create_installer():
     try:
         result = subprocess.run([
             inno_path,
-            "installer.iss"
+            "tools/installer.iss"
         ], capture_output=True, text=True, cwd=os.getcwd())
         
         if result.returncode == 0:

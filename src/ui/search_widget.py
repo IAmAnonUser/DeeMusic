@@ -27,6 +27,7 @@ from PyQt6.sip import isdeleted as sip_is_deleted # Added import
 from utils.image_cache import get_image_from_cache, save_image_to_cache
 from utils.icon_utils import get_icon # ADD THIS IMPORT
 from ui.components.responsive_grid import ResponsiveGridWidget
+from .track_list_header_widget import TrackListHeaderWidget
 
 # Add this global semaphore to limit concurrent downloads
 # This will be shared across all instances of SearchResultCard
@@ -1071,6 +1072,9 @@ class SearchWidget(QWidget):
         self.filter_buttons = {} # To store filter buttons for styling
         self.all_loaded_results = [] # Initialize all_loaded_results
         
+        # Track data for sorting
+        self.current_tracks_data = []
+        
         # Initialize Spotify integration
         self.spotify_api = SpotifyAPI(config_manager)
         
@@ -1588,6 +1592,9 @@ class SearchWidget(QWidget):
         if not tracks:
             return
         
+        # Store tracks data for sorting
+        self.current_tracks_data = tracks
+        
         # Create container for the track list
         track_list_container = QWidget()
         container_layout = QVBoxLayout(track_list_container)
@@ -1597,6 +1604,9 @@ class SearchWidget(QWidget):
         # Add track list header
         track_header = self._create_track_list_header()
         container_layout.addWidget(track_header)
+        
+        # Store reference to the container for sorting updates
+        self.current_track_list_container = track_list_container
         
         # Add tracks with match score indicators
         for i, track_data in enumerate(tracks):
@@ -1619,11 +1629,11 @@ class SearchWidget(QWidget):
                 # Style failed matches differently
                 card.setStyleSheet("QFrame { background-color: rgba(255, 0, 0, 0.1); }")
             
-            # Connect signals if it's a successful match
-            if not track_data.get('match_failed', False):
-                card.download_clicked.connect(self._handle_card_download_request)
-                card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
-                card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
+            # Connect signals
+            card.card_selected.connect(self._handle_card_selection)
+            card.download_clicked.connect(self._handle_card_download_request)
+            card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
+            card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
             
             container_layout.addWidget(card)
         
@@ -1933,6 +1943,9 @@ class SearchWidget(QWidget):
             logger.debug("No tracks to display in track list section for 'All' view.")
             return
         
+        # Store tracks data for sorting
+        self.current_tracks_data = tracks
+        
         logger.debug(f"Adding track list section to 'All' view with {len(tracks)} tracks.")
         
         # --- START HEADER CONSTRUCTION FOR TRACKS SECTION ---
@@ -1946,11 +1959,6 @@ class SearchWidget(QWidget):
         tracks_header_layout.addWidget(tracks_title_label)
 
         # Add "View All" button for tracks if there are more tracks than the display limit (5)
-        # We need the original full list of tracks from the payload to decide this, 
-        # not just the `tracks` list passed to this function if it was pre-sliced.
-        # For now, this function is only called from _display_aggregated_search_results,
-        # where track_items is the full list for tracks.
-        # Let's assume `tracks` argument here is the full list available for the current query.
         if len(tracks) > 5: # 5 is the display limit for tracks in aggregated view
             view_all_tracks_button = QPushButton("View all")
             view_all_tracks_button.setObjectName("ViewAllButton") # Use existing style
@@ -1959,7 +1967,6 @@ class SearchWidget(QWidget):
             tracks_header_layout.addWidget(view_all_tracks_button)
 
         tracks_header_layout.addStretch(1) # Push title and button to the left
-        # REMOVED: self.results_layout.addWidget(tracks_header_widget) # Add the header to the main results layout
         # --- END HEADER CONSTRUCTION FOR TRACKS SECTION ---
 
         # Create a container widget that will be constrained horizontally, similar to _display_categorized_search_results
@@ -1967,9 +1974,6 @@ class SearchWidget(QWidget):
         # Use a QHBoxLayout for this container to add stretches for centering
         centering_hbox = QHBoxLayout(constrained_width_container)
         centering_hbox.setContentsMargins(0,0,0,0)
-
-        # REMOVING THE INITIAL LEFT STRETCH THAT CAUSED THE GAP
-        # centering_hbox.addStretch(1) 
 
         # This is the widget that will actually hold the track header and list of tracks
         track_list_content_widget = QWidget()
@@ -1986,14 +1990,15 @@ class SearchWidget(QWidget):
         track_header = self._create_track_list_header()
         track_list_vbox.addWidget(track_header)
 
+        # Store reference to the container for sorting updates
+        self.current_track_list_container = track_list_content_widget
+
         # For the 'All' view, limit to a certain number of tracks, e.g., 5
-        # If this method were to be reused for a dedicated 'View All Tracks' page,
-        # this limit would need to be conditional or handled differently.
         tracks_to_display = tracks[:5]
 
         for item_data in tracks_to_display: # MODIFIED: iterate over the sliced list
             if item_data.get('type') == 'track': # Ensure it's a track
-                card = SearchResultCard(item_data)
+                card = SearchResultCard(item_data, show_duration=True)
                 card.card_selected.connect(self._handle_card_selection) # Though tracks usually don't have detail views
                 card.download_clicked.connect(self._handle_card_download_request)
                 # NEW: Connect artist and album name click signals
@@ -2011,75 +2016,94 @@ class SearchWidget(QWidget):
         self.results_layout.addWidget(constrained_width_container)
 
     def _create_track_list_header(self) -> QWidget:
-        """Creates the header row for a track list."""
-        header_widget = QWidget()
+        """Creates the sortable header row for a track list."""
+        header_widget = TrackListHeaderWidget(show_track_numbers=False)
         header_widget.setObjectName("SearchTrackListHeader")
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(10, 8, 10, 8) # CHANGED from (10,5,10,5)
-        header_layout.setSpacing(10)
-        header_widget.setFixedHeight(35) # ADDED to match TrackListHeaderWidget
-
-        artwork_header_label = QLabel("")
-        artwork_header_label.setFixedWidth(48)
-        header_layout.addWidget(artwork_header_label)
-
-        title_header_label = QLabel("TRACK")
-        title_header_label.setObjectName("SearchTrackListHeaderLabel")
-        title_header_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        font = title_header_label.font() # Get current font
-        font.setBold(True) # Make it bold
-        title_header_label.setFont(font) # Set the new font
-        header_layout.addWidget(title_header_label, 5, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        artist_header_label = QLabel("ARTIST")
-        artist_header_label.setObjectName("SearchTrackListHeaderLabel")
-        artist_header_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        font = artist_header_label.font()
-        font.setBold(True)
-        artist_header_label.setFont(font)
-        header_layout.addWidget(artist_header_label, 4, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        album_header_label = QLabel("ALBUM")
-        album_header_label.setObjectName("SearchTrackListHeaderLabel")
-        album_header_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        font = album_header_label.font()
-        font.setBold(True)
-        album_header_label.setFont(font)
-        header_layout.addWidget(album_header_label, 3, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         
-        duration_header_label = QLabel("DUR.")
-        duration_header_label.setObjectName("SearchTrackListHeaderLabel")
-        duration_header_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        font = duration_header_label.font()
-        font.setBold(True)
-        duration_header_label.setFont(font)
-        duration_header_label.setFixedWidth(45)
-        header_layout.addWidget(duration_header_label, 0)
-
+        # Connect sorting signals
+        header_widget.sort_requested.connect(self._handle_track_sort)
+        
         return header_widget
+
+    def _handle_track_sort(self, column_name: str, ascending: bool):
+        """Handle sorting request for tracks in search results."""
+        logger.info(f"[SearchWidget] Sorting tracks by {column_name}, ascending: {ascending}")
+        
+        if not self.current_tracks_data:
+            logger.warning("[SearchWidget] No tracks data available for sorting")
+            return
+            
+        # Sort the tracks
+        sorted_tracks = self._sort_tracks_by(self.current_tracks_data, column_name, ascending)
+        
+        # Update the display with sorted tracks
+        self._update_track_display(sorted_tracks)
+
+    def _sort_tracks_by(self, tracks: list, column_name: str, ascending: bool) -> list:
+        """Sort tracks by the specified column."""
+        def get_sort_key(track):
+            if column_name == "title":
+                return track.get('title', '').lower()
+            elif column_name == "artist":
+                return track.get('artist', {}).get('name', '').lower()
+            elif column_name == "album":
+                return track.get('album', {}).get('title', '').lower()
+            elif column_name == "duration":
+                return track.get('duration', 0)
+            else:
+                return ''
+        
+        return sorted(tracks, key=get_sort_key, reverse=not ascending)
+
+    def _update_track_display(self, tracks: list):
+        """Update the track display with new track data."""
+        # Find the track list container and update it
+        if hasattr(self, 'current_track_list_container'):
+            # Clear existing tracks
+            layout = self.current_track_list_container.layout()
+            if layout:
+                # Remove all track cards (keep the header)
+                for i in reversed(range(layout.count())):
+                    item = layout.itemAt(i)
+                    if item and item.widget():
+                        widget = item.widget()
+                        if isinstance(widget, SearchResultCard):
+                            widget.setParent(None)
+                            widget.deleteLater()
+                
+                # Add new sorted tracks
+                for track_data in tracks:
+                    if track_data.get('type') == 'track':
+                        card = SearchResultCard(track_data, show_duration=True)
+                        card.card_selected.connect(self._handle_card_selection)
+                        card.download_clicked.connect(self._handle_card_download_request)
+                        card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
+                        card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
+                        layout.addWidget(card)
 
     def _display_categorized_search_results(self, results: list, category_title: str):
         """Displays search results for a specific category (e.g., Tracks, Albums)."""
         logger.debug(f"Displaying categorized results for '{category_title}'. Number of items: {len(results)}") # Existing
         if results:
             logger.debug(f"First item in categorized results for '{category_title}': {results[0]}") # Log first item
-        # self._clear_results() # REMOVED: Clearing is done in perform_search or other entry points
 
         if not results:
             no_results_label = QLabel(f"No {category_title.lower()} found.")
             no_results_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.results_layout.addWidget(no_results_label)
-            # self.results_layout.addStretch() # Stretch is added at the end of handle_search_results
             return
         
         if category_title.lower() == "tracks":
+            # Store tracks data for sorting
+            self.current_tracks_data = results
+            
             # Create a container widget that will be constrained horizontally
             constrained_width_container = QWidget()
             # Use a QHBoxLayout for this container to add stretches
             centering_hbox = QHBoxLayout(constrained_width_container)
             centering_hbox.setContentsMargins(0,0,0,0)
 
-            centering_hbox.addStretch(1) # MODIFIED: Left stretch from 0 to 1 (small margin)
+            centering_hbox.addStretch(1) # Left stretch for small margin
 
             # This is the widget that will actually hold the track header and list of tracks
             track_list_content_widget = QWidget()
@@ -2091,8 +2115,11 @@ class SearchWidget(QWidget):
             track_header = self._create_track_list_header()
             track_list_vbox.addWidget(track_header)
 
+            # Store reference to the container for sorting updates
+            self.current_track_list_container = track_list_content_widget
+
             for item_data in results:
-                card = SearchResultCard(item_data)
+                card = SearchResultCard(item_data, show_duration=True)
                 card.card_selected.connect(self._handle_card_selection)
                 card.download_clicked.connect(self._handle_card_download_request)
                 # NEW: Connect artist and album name click signals for track lists
@@ -2102,8 +2129,8 @@ class SearchWidget(QWidget):
             
             track_list_vbox.addStretch(1) # Stretch at the end of the vertical track list
 
-            centering_hbox.addWidget(track_list_content_widget, 15) # MODIFIED: Content stretch from 3 to 15
-            centering_hbox.addStretch(1) # MODIFIED: Right stretch remains 1 (small margin)
+            centering_hbox.addWidget(track_list_content_widget, 15) # Content stretch
+            centering_hbox.addStretch(1) # Right stretch
 
             self.results_layout.addWidget(constrained_width_container)
 
@@ -2121,7 +2148,6 @@ class SearchWidget(QWidget):
             # Add all cards to the responsive grid
             responsive_grid.set_cards(cards)
             self.results_layout.addWidget(responsive_grid)
-            # self.results_layout.addStretch() # Stretch is added at the end of handle_search_results
         else: # Fallback for unknown category_title, though should not happen with current filters
             logger.warning(f"Unknown category title for display: {category_title}")
             for item_data in results: # Display as simple vertical list
@@ -2129,8 +2155,6 @@ class SearchWidget(QWidget):
                 card.card_selected.connect(self._handle_card_selection)
                 card.download_clicked.connect(self._handle_card_download_request)
                 self.results_layout.addWidget(card)
-        # self.results_layout.addStretch() # Stretch is added at the end of handle_search_results
-
 
     def _create_section_widget(self, title: str, items: list, item_type_for_view_all: str, horizontal: bool = True, max_items: int = 5):
         """Creates a widget for a section of search results (e.g., Top Result, Tracks, Albums)."""
@@ -2374,39 +2398,14 @@ class SearchWidget(QWidget):
             if item_type == 'track':
                 self.download_manager.download_track(item_id)
             elif item_type == 'album':
-                # For albums, first fetch album details to get all track IDs
-                logger.debug(f"Fetching album details for album ID: {item_id} to get track list.")
-                album_details = self.deezer_api.get_album_details_sync(item_id) # Use the synchronous version
-                
-                if album_details and 'tracks' in album_details['tracks']:
-                    track_ids = [track.get('id') for track in album_details['tracks']['data'] if track.get('id')]
-                    if track_ids:
-                        logger.info(f"Queueing album download for ID: {item_id} with {len(track_ids)} tracks.")
-                        self.download_manager.download_album(item_id, track_ids)
-                    else:
-                        logger.error(f"No track IDs found for album {item_id} after fetching details.")
-                        # Optionally, inform the user via a signal or UI update
-                else:
-                    logger.error(f"Failed to get track list for album {item_id}. Details: {album_details}")
-                    # Optionally, inform the user
+                # Use async download_album method - it will fetch album details internally
+                logger.info(f"Queueing album download for ID: {item_id}. Details will be fetched asynchronously.")
+                asyncio.create_task(self.download_manager.download_album(album_id=item_id, track_ids=[]))
             elif item_type == 'playlist':
-                # For playlists, similar to albums, get playlist details then tracks
-                logger.debug(f"Fetching playlist details for playlist ID: {item_id}")
-                # Assuming a similar method exists or needs to be added in DeezerAPI for playlists
-                # For now, let's assume playlist_details contains tracks.data like albums
-                # playlist_details = self.deezer_api.get_playlist_details_sync(item_id) # Placeholder
-                # if playlist_details and 'tracks' in playlist_details and 'data' in playlist_details['tracks']:
-                #     track_ids = [track.get('id') for track in playlist_details['tracks']['data'] if track.get('id')]
-                #     playlist_title = playlist_details.get('title', 'Unknown Playlist')
-                #     if track_ids:
-                #         self.download_manager.download_playlist(item_id, playlist_title, track_ids)
-                #     else:
-                #         logger.error(f"No track IDs found for playlist {item_id}")
-                # else:
-                #    logger.error(f"Failed to get track list for playlist {item_id}")
-                logger.warning(f"Playlist download not fully implemented yet for ID: {item_id}")
-                # Placeholder: Call download_playlist if you have a way to get track_ids and title
-                # self.download_manager.download_playlist(item_id, "Playlist Title Placeholder", [track_ids_list])
+                # Use async download_playlist method - it will fetch playlist details internally
+                playlist_title = item_data.get('title', 'Unknown Playlist')
+                logger.info(f"Queueing playlist download for ID: {item_id}. Details will be fetched asynchronously.")
+                asyncio.create_task(self.download_manager.download_playlist(playlist_id=item_id, playlist_title=playlist_title, track_ids=[]))
             elif item_type == 'artist':
                 logger.info(f"Downloading all content for artist '{item_data.get('name')}' (ID: {item_id}). This will include albums, singles, and EPs.")
                 asyncio.create_task(self._download_artist_content(artist_id=item_id, artist_name=item_data.get('name')))
@@ -2471,9 +2470,7 @@ class SearchWidget(QWidget):
         # Add all cards to the responsive grid
         responsive_grid.set_cards(cards)
         section_layout.addWidget(responsive_grid)
-        
-        self.results_layout.addWidget(section_frame)
-        self.results_layout.addStretch(1) # Pushes content to the top
+        section_layout.addStretch(1) # Pushes content to the top
 
         if hasattr(self, 'filter_buttons_panel'): # Hide filters for this special view
             self.filter_buttons_panel.hide()

@@ -546,3 +546,40 @@ QLabel#playlist_page_description_label {
     margin-top: 5px;
     padding-left: 2px;
 } 
+
+/* Track List Header Styles */
+QWidget#TrackListHeader {
+    background-color: transparent;
+    border-bottom: 1px solid #E0E0E0;
+}
+
+/* Sortable Track Header Buttons */
+QPushButton#TrackListHeaderButton {
+    background-color: transparent;
+    border: none;
+    color: #666666;
+    font-weight: bold;
+    font-size: 10px;
+    text-transform: uppercase;
+    padding: 8px 5px;
+    text-align: left;
+    border-radius: 4px;
+}
+
+QPushButton#TrackListHeaderButton:hover {
+    background-color: #F0F0F0;
+    color: #333333;
+}
+
+QPushButton#TrackListHeaderButton:pressed {
+    background-color: #E0E0E0;
+    color: #000000;
+}
+
+/* Traditional Track Header Labels (for fallback compatibility) */
+QLabel#TrackListHeaderLabel {
+    color: #666666;
+    font-weight: bold;
+    font-size: 10px;
+    text-transform: uppercase;
+} 

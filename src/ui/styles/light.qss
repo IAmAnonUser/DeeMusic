@@ -431,15 +431,38 @@ QTabBar#artist_page_tab_bar {
 
 /* Track List Headers - Light Theme */
 QLabel#TrackListHeaderLabel, QLabel#SearchTrackListHeaderLabel {
-    color: #333333;
+    color: #666666;
     font-size: 11px;
     font-weight: bold;
     text-transform: uppercase;
+    padding: 0px 4px;
+}
+
+QPushButton#TrackListHeaderButton {
+    color: #666666;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    background-color: transparent;
+    border: none;
+    padding: 8px 4px;
+    text-align: left;
+}
+
+QPushButton#TrackListHeaderButton:hover {
+    color: #333333;
+    background-color: #F0F0F0;
+}
+
+QPushButton#TrackListHeaderButton:pressed {
+    color: #6C2BD9;
+    background-color: #ECEAF0;
 }
 
 QWidget#TrackListHeader, QWidget#SearchTrackListHeader {
     border-bottom: 1px solid #E0E0E0;
     background-color: #FDFDFD;
+    padding: 2px 0px;
 }
 
 /* Vertical Separator Line - Light Theme */
