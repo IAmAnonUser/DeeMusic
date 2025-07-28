@@ -396,7 +396,7 @@ class SearchResultCard(QFrame):
             # Set text as fallback
             self.overlay_action_button.setText("↓")
         
-        self.overlay_action_button.clicked.connect(lambda: self.download_clicked.emit(self.item_data))
+        self.overlay_action_button.clicked.connect(lambda: self._handle_download_button_click())
         self.artwork_container_layout.addWidget(self.overlay_action_button, 0, 0, Qt.AlignmentFlag.AlignCenter)
         # else: # <--- REMOVE THIS ELSE BLOCK
             # self.overlay_action_button = None 
@@ -996,6 +996,35 @@ class SearchResultCard(QFrame):
                     return True
         return super().eventFilter(source, event)
 
+    def _handle_download_button_click(self):
+        """Handle download button click with debugging."""
+        logger.info(f"[SearchResultCard] Download button clicked for {self.item_type}: {self.item_data.get('title', self.item_data.get('name', 'Unknown'))}")
+        logger.info(f"[SearchResultCard] Emitting download_clicked signal with data: {self.item_data}")
+        self.download_clicked.emit(self.item_data)
+        logger.info(f"[SearchResultCard] Signal emitted successfully")
+        
+        # Test if signal connection is working by checking if we can emit
+        try:
+            logger.info(f"[SearchResultCard] Testing signal emission...")
+        except Exception as e:
+            logger.error(f"[SearchResultCard] Error with signal: {e}")
+        
+        # As a workaround, let's try to find the parent SearchWidget and call the handler directly
+        parent_widget = self.parent()
+        while parent_widget:
+            if hasattr(parent_widget, '_handle_card_download_request'):
+                logger.info(f"[SearchResultCard] Found parent with handler, calling directly...")
+                try:
+                    parent_widget._handle_card_download_request(self.item_data)
+                    logger.info(f"[SearchResultCard] Direct call successful")
+                    return
+                except Exception as e:
+                    logger.error(f"[SearchResultCard] Direct call failed: {e}")
+                break
+            parent_widget = parent_widget.parent()
+        
+        logger.warning(f"[SearchResultCard] Could not find parent with download handler")
+
     def mousePressEvent(self, event):
         """Handle mouse press events on the card itself."""
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1014,7 +1043,16 @@ class SearchResultCard(QFrame):
             stagger_delay = random.randint(0, 1000)  # Random stagger up to 1 second
             total_delay = base_delay + stagger_delay
             
-            QTimer.singleShot(total_delay, self.load_artwork)
+            # Check if we're in the main thread before using QTimer
+            from PyQt6.QtCore import QThread
+            from PyQt6.QtWidgets import QApplication
+            # Check if we have a QApplication and are in the main thread
+            app = QApplication.instance()
+            if app and QThread.currentThread() == app.thread():
+                QTimer.singleShot(total_delay, self.load_artwork)
+            else:
+                # We're in a worker thread, load immediately
+                self.load_artwork()
 
 class SpotifyDataWorkerSignals(QObject):
     """Signals for Spotify data worker."""
@@ -1633,6 +1671,13 @@ class SearchWidget(QWidget):
             # Connect signals
             card.card_selected.connect(self._handle_card_selection)
             card.download_clicked.connect(self._handle_card_download_request)
+            logger.info(f"[SearchWidget] Connected download signal for card: {item_data.get('title', item_data.get('name', 'Unknown'))}")
+            
+            # Test the connection by checking if the handler method exists
+            if hasattr(self, '_handle_card_download_request'):
+                logger.info(f"[SearchWidget] Handler method exists and is callable")
+            else:
+                logger.error(f"[SearchWidget] Handler method does NOT exist!")
             card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
             card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
             
@@ -1795,6 +1840,16 @@ class SearchWidget(QWidget):
     def handle_search_results(self, results_payload: dict): # Changed results to results_payload
         logger.debug(f"SearchWidget.handle_search_results received payload with keys: {results_payload.keys()}")
         self.all_loaded_results_payload = results_payload # Store the full payload
+
+        # CRITICAL FIX: Populate all_loaded_results for View All buttons to work
+        self.all_loaded_results = []
+        for category in ['artist_results', 'album_results', 'playlist_results', 'track_results']:
+            if category in results_payload:
+                self.all_loaded_results.extend(results_payload[category])
+        
+        # Also add general results if they exist
+        if 'all_results' in results_payload:
+            self.all_loaded_results.extend(results_payload['all_results'])
 
         # self._clear_results() # REMOVED: Clearing is done in perform_search before worker starts
         
@@ -2345,10 +2400,19 @@ class SearchWidget(QWidget):
     def _handle_view_all_clicked(self, category_to_view: str):
         """Handles the 'View All' button click for a category."""
         logger.info(f"View All clicked for category: {category_to_view}")
+        logger.debug(f"Total items in all_loaded_results: {len(self.all_loaded_results)}")
+        
         # Filter self.all_loaded_results for the specific category and display them
         # This assumes self.all_loaded_results contains everything from the last main search query.
         
         category_results = [item for item in self.all_loaded_results if item.get('type') == category_to_view]
+        logger.debug(f"Filtered {len(category_results)} items for category '{category_to_view}'")
+        
+        if not category_results:
+            logger.warning(f"No results found for category '{category_to_view}'. Available types: {set(item.get('type') for item in self.all_loaded_results)}")
+        
+        # Clear results before displaying categorized view
+        self._clear_results()
         
         # Update filter button style to show which category is being viewed, if desired, or keep "All" active
         # For now, we'll just display the results in a categorized view without changing the top filter buttons.
@@ -2473,6 +2537,9 @@ class SearchWidget(QWidget):
         section_layout.addWidget(responsive_grid)
         section_layout.addStretch(1) # Pushes content to the top
 
+        # CRITICAL FIX: Add the section_frame to the results_layout
+        self.results_layout.addWidget(section_frame)
+
         if hasattr(self, 'filter_buttons_panel'): # Hide filters for this special view
             self.filter_buttons_panel.hide()
 
@@ -2492,15 +2559,19 @@ class SearchWidget(QWidget):
 
     # CORRECTLY PLACED _handle_card_download_request as a class method
     def _handle_card_download_request(self, item_data: dict):
+        logger.info(f"[SearchWidget] _handle_card_download_request called with data: {item_data}")
+        
         item_type = item_data.get('type')
         item_id = item_data.get('id')
         item_title = item_data.get('title', item_data.get('name', 'Unknown Item'))
 
+        logger.info(f"[SearchWidget] Download request received for: {item_title} (ID: {item_id}, Type: {item_type})")
+        
         if not self.download_manager:
-            logger.error("DownloadManager not available in SearchWidget.")
+            logger.error("[SearchWidget] DownloadManager not available in SearchWidget.")
             return
 
-        logger.info(f"[SearchWidget] Download requested for: {item_title} (ID: {item_id}, Type: {item_type})")
+        logger.info(f"[SearchWidget] DownloadManager available, processing download request for: {item_title}")
 
         can_proceed = True
         if not item_id:
@@ -2515,7 +2586,11 @@ class SearchWidget(QWidget):
             self.download_manager._queue_individual_track_download(track_id=item_id, item_type='track', track_details=item_data)
         elif item_type == 'album':
             logger.info(f"Calling DownloadManager.download_album for album '{item_title}' (ID: {item_id}). Tracks will be fetched by DM.")
-            asyncio.create_task(self.download_manager.download_album(album_id=item_id, track_ids=[]))
+            try:
+                asyncio.create_task(self.download_manager.download_album(album_id=item_id, track_ids=[]))
+                logger.info(f"[SearchWidget] Successfully created download task for album {item_id}")
+            except Exception as e:
+                logger.error(f"[SearchWidget] Error creating download task for album {item_id}: {e}")
         elif item_type == 'playlist':
             playlist_specific_title = item_data.get('title', item_title)
             logger.info(f"Calling DownloadManager.download_playlist for playlist '{playlist_specific_title}' (ID: {item_id}). Tracks will be fetched by DM.")

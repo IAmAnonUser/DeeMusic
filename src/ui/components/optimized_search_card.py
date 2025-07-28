@@ -315,9 +315,17 @@ class OptimizedSearchCard(QFrame):
         self._set_placeholder_artwork()
         
         # Setup timer to check for loaded image
-        self._check_timer = QTimer()
-        self._check_timer.timeout.connect(lambda: self._check_for_loaded_artwork(urls, target_size))
-        self._check_timer.start(500)  # Check every 500ms
+        # Check if we're in the main thread before creating timer
+        from PyQt6.QtCore import QThread
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app and QThread.currentThread() == app.thread():
+            self._check_timer = QTimer()
+            self._check_timer.timeout.connect(lambda: self._check_for_loaded_artwork(urls, target_size))
+            self._check_timer.start(500)  # Check every 500ms
+        else:
+            # We're in a worker thread, check immediately without timer
+            self._check_for_loaded_artwork(urls, target_size)
     
     def _check_for_loaded_artwork(self, urls: List[str], target_size: QSize):
         """Check if artwork has been loaded in cache."""
@@ -404,8 +412,16 @@ class OptimizedSearchCard(QFrame):
         self._is_in_viewport = in_viewport
         
         if in_viewport:
-            # Start timer for delayed initialization
-            self._visibility_timer.start(100)  # 100ms delay
+            # Check if we're in the main thread before starting timer
+            from PyQt6.QtCore import QThread
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app and QThread.currentThread() == app.thread():
+                # Start timer for delayed initialization
+                self._visibility_timer.start(100)  # 100ms delay
+            else:
+                # We're in a worker thread, initialize immediately
+                self._on_visibility_timeout()
         else:
             # Cancel delayed loading if not in viewport
             self._visibility_timer.stop()

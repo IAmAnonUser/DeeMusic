@@ -27,16 +27,36 @@ from .playlist_detail_page import PlaylistDetailPage # Added import
 from .album_detail_page import AlbumDetailPage # Import AlbumDetailPage
 from .artist_detail_page import ArtistDetailPage # Import ArtistDetailPage
 from .download_queue_widget import DownloadQueueWidget # ADDED: Import DownloadQueueWidget
+from .library_scanner_widget_minimal import LibraryScannerWidget # ADDED: Import LibraryScannerWidget
 from src.config_manager import ConfigManager
 from src.services.deezer_api import DeezerAPI
 from src.services.download_manager import DownloadManager
 from src.services.music_player import MusicPlayer, DummyMusicPlayer
-from src.services.queue_manager import QueueManager, Track, DummyQueueManager
+from src.services.queue_manager import QueueManager, Track
 import logging
 import os
 import asyncio 
 
 logger = logging.getLogger(__name__)
+
+# Add this helper function near the top of the file (after imports)
+def trackinfo_to_dict(track):
+    return {
+        "file_path": getattr(track, "file_path", ""),
+        "title": getattr(track, "title", ""),
+        "artist": getattr(track, "artist", ""),
+        "album": getattr(track, "album", ""),
+        "album_artist": getattr(track, "album_artist", ""),
+        "track_number": getattr(track, "track_number", 0),
+        "disc_number": getattr(track, "disc_number", 1),
+        "year": getattr(track, "year", 0),
+        "duration": getattr(track, "duration", 0),
+        "genre": getattr(track, "genre", ""),
+        "file_size": getattr(track, "file_size", 0),
+        "file_format": getattr(track, "file_format", ""),
+        "bitrate": getattr(track, "bitrate", 0),
+        "sample_rate": getattr(track, "sample_rate", 0)
+    }
 
 class MainWindow(QMainWindow):
     """Main window of the DeeMusic application."""
@@ -60,9 +80,14 @@ class MainWindow(QMainWindow):
         # Initialize managers to None initially
         self.deezer_api = None
         self.download_manager = None
-        # Initialize player and queue manager WITH DUMMY IMPLEMENTATIONS
+        # Initialize player and queue manager
         self.music_player = DummyMusicPlayer() # MODIFIED
-        self.queue_manager = DummyQueueManager(self.music_player)  # MODIFIED
+        try:
+            self.queue_manager = QueueManager()
+            logger.info("QueueManager initialized.")
+        except Exception as e:
+            logger.error(f"Failed to initialize QueueManager: {e}")
+            raise
         
         self.setWindowTitle("DeeMusic")
         self.setMinimumSize(1400, 900) # MODIFIED: Increased width and height to show more content
@@ -92,6 +117,16 @@ class MainWindow(QMainWindow):
             logger.error("[Initialize Services] Failed to initialize DeezerAPI.")
         else:
             logger.info("[Initialize Services] DeezerAPI initialized successfully.")
+            
+        # Check ARL token status
+        arl_token = self.config.get_setting('deezer.arl', '')
+        if not arl_token:
+            logger.warning("[Initialize Services] No ARL token configured - home page content will not load")
+            logger.warning("[Initialize Services] Please configure your ARL token in Settings > Account")
+        else:
+            logger.info(f"[Initialize Services] ARL token configured (length: {len(arl_token)})")
+            # Skip API test during initialization to improve startup speed
+            # The home page will test the token when it loads content
             
         logger.info("[Initialize Services] Initializing DownloadManager...")
         self.download_manager = DownloadManager(self.config, self.deezer_api) 
@@ -303,11 +338,15 @@ class MainWindow(QMainWindow):
         self.album_detail_page = AlbumDetailPage(deezer_api=None, download_manager=self.download_manager, parent=self)
         self.artist_detail_page = ArtistDetailPage(deezer_api=None, download_manager=self.download_manager, parent=self)
         
+        # Library Scanner Widget (NEW)
+        self.library_scanner_widget = LibraryScannerWidget(config_manager=self.config, parent=self)
+        
         self.content_stack.addWidget(self.home_page)            # Index 0
         self.content_stack.addWidget(self.search_widget_page)   # Index 1
         self.content_stack.addWidget(self.playlist_detail_page) # Index 2
         self.content_stack.addWidget(self.album_detail_page)    # Index 3
         self.content_stack.addWidget(self.artist_detail_page)   # Index 4
+        self.content_stack.addWidget(self.library_scanner_widget) # Index 5
 
         # Set default view to Home
         self.content_stack.setCurrentWidget(self.home_page)
@@ -343,6 +382,16 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(config=self.config, theme_manager=self.theme_manager, parent=self)
         dialog.settings_changed.connect(self.handle_settings_changed)
         dialog.exec()
+    
+    def show_library_scanner(self):
+        """Show the Library Scanner widget."""
+        logger.info("Showing Library Scanner")
+        target_index = self.content_stack.indexOf(self.library_scanner_widget)
+        if target_index != -1:
+            self._switch_to_view(target_index)
+            self._update_back_button_visibility()
+        else:
+            logger.error("Library Scanner widget not found in content stack")
 
     def handle_settings_changed(self, changes: dict):
         """Handle changes from the settings dialog."""
@@ -441,15 +490,40 @@ class MainWindow(QMainWindow):
         # Add a small spacer to push search bar a bit to the right
         top_bar_layout.addSpacing(40) # MODIFIED: Increased spacing
 
-        # Search Bar (moved to top bar)
+        # Search Bar (made narrower to fit Library Scanner button)
         self.search_bar = QLineEdit()
         self.search_bar.setObjectName("searchBar") # For QSS styling
         self.search_bar.setPlaceholderText("Artists, Albums, Tracks, Playlists, Spotify Playlist URL...")
         self.search_bar.returnPressed.connect(self._handle_header_search)
-        # self.search_bar.setMaximumWidth(400) # Make search bar smaller - REMOVED
-        self.search_bar.setMinimumWidth(500) # MODIFIED to make it wider and allow expansion
-        self.search_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed) # Allow horizontal expansion
-        top_bar_layout.addWidget(self.search_bar, 1) # Add stretch factor to allow it to take more space
+        self.search_bar.setMinimumWidth(400) # MODIFIED: Made narrower to fit Library Scanner button
+        self.search_bar.setMaximumWidth(600) # ADDED: Set maximum width to prevent it from being too wide
+        self.search_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        top_bar_layout.addWidget(self.search_bar, 1)
+
+        # Library Scanner Button (NEW)
+        self.library_scanner_btn = QPushButton("📚 Library Scanner")
+        self.library_scanner_btn.setObjectName("LibraryScannerButton")
+        self.library_scanner_btn.setToolTip("Open Library Scanner to find missing albums")
+        self.library_scanner_btn.clicked.connect(self.show_library_scanner)
+        self.library_scanner_btn.setStyleSheet("""
+            QPushButton#LibraryScannerButton {
+                background-color: #6C2BD9;
+                color: #FFFFFF;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 14px;
+                margin-left: 10px;
+            }
+            QPushButton#LibraryScannerButton:hover {
+                background-color: #7C3BE9;
+            }
+            QPushButton#LibraryScannerButton:pressed {
+                background-color: #5C1BC9;
+            }
+        """)
+        top_bar_layout.addWidget(self.library_scanner_btn)
 
         # Top Right Controls (Settings and Theme Toggle)
         top_right_controls_layout = QHBoxLayout()
@@ -842,32 +916,68 @@ class MainWindow(QMainWindow):
             return
 
         current_index = self.content_stack.currentIndex()
+        current_widget = self.content_stack.currentWidget()
+        target_widget = self.content_stack.widget(target_index)
+        
+        current_page_name = current_widget.__class__.__name__ if current_widget else "Unknown"
+        target_page_name = target_widget.__class__.__name__ if target_widget else "Unknown"
 
         if current_index == target_index:
-            logger.debug(f"_switch_to_view: Already on target_index {target_index}")
+            logger.debug(f"🔄 SWITCH VIEW: Already on {target_page_name} (index {target_index})")
             self._update_back_button_visibility() # Still update, as context might change history visibility
             return
 
+        logger.info(f"🔄 SWITCH VIEW: {current_page_name} (index {current_index}) → {target_page_name} (index {target_index})")
+        logger.info(f"🔄 SWITCH VIEW: is_back_navigation={is_back_navigation}")
+        logger.info(f"🔄 SWITCH VIEW: History before: {self.view_history}")
+
         if not is_back_navigation:
             if current_index != -1: # Don't add initial invalid index
-                # Avoid adding duplicates if rapidly clicking same nav item that leads to same view
-                if not self.view_history or self.view_history[-1] != current_index:
+                # Only avoid adding duplicates if we're navigating to the same page we're already on
+                # (which shouldn't happen due to the early return above, but just in case)
+                # Always add the current page to history when navigating to a different page
+                if current_index != target_index:
                     self.view_history.append(current_index)
-                logger.debug(f"Added {current_index} to view history. History: {self.view_history}")
+                    logger.info(f"🔄 SWITCH VIEW: Added {current_index} ({current_page_name}) to history")
+                else:
+                    logger.info(f"🔄 SWITCH VIEW: Skipped adding {current_index} ({current_page_name}) - same as target")
+        else:
+            logger.info(f"🔄 SWITCH VIEW: Back navigation - not adding to history")
         
         self.content_stack.setCurrentIndex(target_index)
-        logger.debug(f"Switched view to index {target_index}. Current history: {self.view_history}")
+        logger.info(f"🔄 SWITCH VIEW: Switched to {target_page_name} (index {target_index})")
+        logger.info(f"🔄 SWITCH VIEW: History after: {self.view_history}")
         self._update_back_button_visibility()
 
     def _handle_back_navigation(self):
         """Handles the back button press from SearchWidget."""
-        logger.debug(f"_handle_back_navigation called. History: {self.view_history}")
+        # Prevent rapid back navigation (debounce)
+        import time
+        current_time = time.time()
+        if hasattr(self, '_last_back_navigation_time'):
+            if current_time - self._last_back_navigation_time < 0.5:  # 500ms debounce
+                logger.info("🔙 BACK NAVIGATION: Ignoring rapid back navigation (debounce)")
+                return
+        self._last_back_navigation_time = current_time
+        
+        current_widget = self.content_stack.currentWidget()
+        current_index = self.content_stack.currentIndex()
+        current_page_name = current_widget.__class__.__name__ if current_widget else "Unknown"
+        
+        logger.info(f"🔙 BACK NAVIGATION: Current page: {current_page_name} (index {current_index})")
+        logger.info(f"🔙 BACK NAVIGATION: History before pop: {self.view_history}")
+        
         if self.view_history:
             previous_index = self.view_history.pop()
-            logger.debug(f"Popped {previous_index} from history. New history: {self.view_history}")
+            previous_widget = self.content_stack.widget(previous_index)
+            previous_page_name = previous_widget.__class__.__name__ if previous_widget else "Unknown"
+            
+            logger.info(f"🔙 BACK NAVIGATION: Going back to: {previous_page_name} (index {previous_index})")
+            logger.info(f"🔙 BACK NAVIGATION: History after pop: {self.view_history}")
+            
             self._switch_to_view(previous_index, is_back_navigation=True)
         else:
-            logger.debug("View history is empty, cannot go back.")
+            logger.warning("🔙 BACK NAVIGATION: View history is empty, cannot go back!")
         # Visibility update is handled by _switch_to_view
 
     def _update_back_button_visibility(self):
@@ -900,13 +1010,7 @@ class MainWindow(QMainWindow):
         logger.info("MainWindow close event triggered.")
         
         # Save download queue state before shutdown
-        if hasattr(self, 'download_queue_widget') and self.download_queue_widget:
-            try:
-                self.download_queue_widget.save_queue_state()
-                logger.info("Download queue state saved successfully.")
-            except Exception as e:
-                logger.error(f"Failed to save download queue state: {e}")
-        
+        # Removed: self.download_queue_widget.save_queue_state()
         # Perform cleanup tasks
         if self.download_manager:
             logger.info("Shutting down DownloadManager...")

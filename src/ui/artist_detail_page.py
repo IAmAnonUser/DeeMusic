@@ -16,7 +16,7 @@ from src.utils.performance_manager import PerformanceManager
 
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                              QPushButton, QScrollArea, QFrame, QStackedWidget, 
-                             QTabBar, QGridLayout, QSizePolicy)
+                             QTabBar, QGridLayout, QSizePolicy, QApplication)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QRunnable, QThreadPool, pyqtSlot, QSize
 from PyQt6.QtGui import QPixmap, QPainter, QPainterPath, QFont, QIcon, QColor, QImage
 
@@ -1724,27 +1724,45 @@ class ArtistDetailPage(QWidget):
         logger.debug("[ArtistDetail] Tab content widgets initialized.")
 
     def _clear_all_tab_content_to_placeholders(self): # ADDED METHOD
-        """Resets all tab content areas to their initial placeholder state."""
-        logger.debug("[ArtistDetail] Clearing all tab content to placeholders.")
-        tabs_map = {
-            0: (self.top_tracks_page, "Top Tracks Content - Track List"),
-            1: (self.albums_page, "Albums Content - Grid of Albums"),
-            2: (self.singles_page, "Singles Content - Grid of Singles"),
-            3: (self.eps_page, "EP's Content - Grid of EPs"),
-            4: (self.featured_in_page, "Featured In Content - Grid of Playlists/Tracks")
-        }
-        for _index, (page_widget, placeholder_text) in tabs_map.items():
-            if page_widget:
-                scroll_area = page_widget.findChild(QScrollArea)
-                if scroll_area:
-                    # Create a new placeholder label each time to ensure it replaces the old widget
-                    placeholder_label = QLabel(placeholder_text)
-                    placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    scroll_area.setWidget(placeholder_label)
-                else:
-                    logger.warning(f"[ArtistDetail] Could not find QScrollArea in page_widget for placeholder: {placeholder_text}")
-            else:
-                logger.warning(f"[ArtistDetail] page_widget is None for placeholder: {placeholder_text}")
+        """Clear all tab content layouts and set placeholders/loading labels."""
+        # Clear Top Tracks - Use defensive clearing
+        if hasattr(self, 'top_tracks_list_layout') and not self._safe_sip_is_deleted(self.top_tracks_list_layout):
+            try:
+                self._clear_layout(self.top_tracks_list_layout)
+                # Only add loading label if the layout is still valid
+                try:
+                    loading_label = QLabel("Loading top tracks...")
+                    loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.top_tracks_list_layout.addWidget(loading_label)
+                except RuntimeError:
+                    # Layout was deleted, skip adding loading label
+                    pass
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing top tracks layout: {e}")
+        # Clear Albums - Use defensive clearing
+        if hasattr(self, 'albums_flow_layout') and not self._safe_sip_is_deleted(self.albums_flow_layout):
+            try:
+                self._clear_layout(self.albums_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing albums layout: {e}")
+        # Clear Singles - Use defensive clearing
+        if hasattr(self, 'singles_flow_layout') and not self._safe_sip_is_deleted(self.singles_flow_layout):
+            try:
+                self._clear_layout(self.singles_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing singles layout: {e}")
+        # Clear EPs - Use defensive clearing
+        if hasattr(self, 'eps_flow_layout') and not self._safe_sip_is_deleted(self.eps_flow_layout):
+            try:
+                self._clear_layout(self.eps_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing eps layout: {e}")
+        # Clear Featured In - Use defensive clearing
+        if hasattr(self, 'featured_in_flow_layout') and not self._safe_sip_is_deleted(self.featured_in_flow_layout):
+            try:
+                self._clear_layout(self.featured_in_flow_layout)
+            except Exception as e:
+                logger.debug(f"[ArtistDetail] Error clearing featured in layout: {e}")
 
     def _create_and_load_card(self, item_data, parent_widget, on_card_click, on_download_click=None):
         """Centralized helper to create cards with proper image loading."""
@@ -2071,7 +2089,6 @@ class ArtistDetailPage(QWidget):
 
 # Example for standalone testing (requires qasync or similar for asyncio with Qt)
 if __name__ == '__main__':
-    from PyQt6.QtWidgets import QApplication
     import sys
 
     # Basic logger for test
@@ -2092,8 +2109,6 @@ if __name__ == '__main__':
             return {'error': {'message': 'Artist not found'}}
         # Add other mock methods as needed
 
-    app = QApplication(sys.argv)
-    
     # This is a simplified way to run asyncio with PyQt for testing.
     # For a full app, use a library like qasync.
     async def run_app():
@@ -2129,4 +2144,5 @@ if __name__ == '__main__':
     # Schedule the async load
     asyncio.ensure_future(artist_page_sync.load_artist_data(artist_id=27))
     
+    app = QApplication(sys.argv)
     sys.exit(app.exec()) # This will block until the app is closed 

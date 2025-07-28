@@ -4,9 +4,30 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QScrollArea, QFrame, QPushButton, QGridLayout, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer, QThread
+from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QPixmap, QIcon
 import asyncio
+import logging
+
+def safe_single_shot(delay_ms, callback):
+    """Safely execute QTimer.singleShot, checking thread safety first."""
+    try:
+        from PyQt6.QtCore import QThread, QTimer
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app and QThread.currentThread() == app.thread():
+            QTimer.singleShot(delay_ms, callback)
+        else:
+            # We're in a worker thread, execute immediately
+            callback()
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Error in safe_single_shot: {e}")
+        # Fallback: execute immediately
+        try:
+            callback()
+        except Exception as callback_error:
+            logging.getLogger(__name__).error(f"Error in callback fallback: {callback_error}")
 import os
 import logging
 
@@ -28,11 +49,17 @@ class HomePage(QWidget):
     home_item_selected = pyqtSignal(dict, str) # ADDED: For general item selection from home page
     home_item_download_requested = pyqtSignal(dict) # ADDED: For item download from home page
     
+    # Signal for thread-safe scroll arrow updates
+    update_scroll_arrows_signal = pyqtSignal(object, object, object)
+    
     def __init__(self, deezer_api, download_manager=None, parent=None):
         super().__init__(parent)
         self.deezer_api = deezer_api
         self.download_manager = download_manager # Will be set by MainWindow
         self.section_content_layouts = {} # New: to store QHBoxLayouts for scrollable content
+        
+        # Connect the signal to the slot for thread-safe updates
+        self.update_scroll_arrows_signal.connect(self._update_scroll_arrows_delayed)
         self.section_scroll_arrows = {} # New: to store (left_arrow, right_arrow) for each section
         self.section_scroll_areas = {} # New: to store QScrollArea for each section
         self._placeholder_image_path = os.path.join(
@@ -185,6 +212,14 @@ class HomePage(QWidget):
         logger.critical("!!!!!!!!!!!!!! HomePage.load_content CALLED !!!!!!!!!!!!!!") # Prominent log
         if not self.deezer_api:
             logger.error("HomePage: DeezerAPI not initialized. Cannot load content.")
+            self._show_error_message("DeezerAPI not initialized. Please restart the application.")
+            return
+            
+        # Check if ARL token is configured
+        arl_token = self.deezer_api.arl if hasattr(self.deezer_api, 'arl') else None
+        if not arl_token:
+            logger.error("HomePage: Cannot load content - No ARL token configured.")
+            self._show_error_message("No ARL token configured. Please go to Settings > Account to configure your Deezer ARL token.")
             return
 
         # Clear existing sections from layout if any (in case of reload)
@@ -283,7 +318,8 @@ class HomePage(QWidget):
                         scroll_area_ref = self.section_scroll_areas[section_title] # Renamed to avoid lambda capture issue
                         left_arrow_ref, right_arrow_ref = self.section_scroll_arrows[section_title]
                         # Delay update to allow layout to settle
-                        QTimer.singleShot(100, lambda sa=scroll_area_ref, la=left_arrow_ref, ra=right_arrow_ref: self.update_scroll_arrows_state(sa, la, ra)) # MODIFIED delay to 100ms
+                        # Use signal for thread-safe scroll arrow updates
+                        self.update_scroll_arrows_signal.emit(scroll_area_ref, left_arrow_ref, right_arrow_ref)
 
                 else:
                     logger.info(f"HomePage: No items returned for '{section_title}'.")
@@ -292,6 +328,50 @@ class HomePage(QWidget):
         
                 logger.critical(f"!!!!!!!!!!!!!! HomePage.load_content FINISHED. Total sections in main_content_layout: {self.main_content_layout.count()} !!!!!!!!!!!!!!")
         self.main_content_layout.addStretch(1) # Add a final stretch to the main page layout
+
+    def _show_error_message(self, message: str):
+        """Show error message on the home page."""
+        try:
+            # Clear existing content
+            while self.main_content_layout.count():
+                item = self.main_content_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            
+            # Show error message
+            error_label = QLabel(message)
+            error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            error_label.setStyleSheet("color: #ff6b6b; font-size: 16px; padding: 20px;")
+            error_label.setWordWrap(True)
+            self.main_content_layout.addWidget(error_label)
+            
+            # Add a retry button
+            from PyQt6.QtWidgets import QPushButton
+            retry_button = QPushButton("Retry Loading Content")
+            retry_button.clicked.connect(lambda: asyncio.create_task(self.load_content()))
+            retry_button.setStyleSheet("padding: 10px 20px; font-size: 14px;")
+            self.main_content_layout.addWidget(retry_button, alignment=Qt.AlignmentFlag.AlignCenter)
+            
+        except Exception as e:
+            logger.error(f"Error showing error message: {e}")
+
+    def _update_scroll_arrows_delayed(self, scroll_area, left_arrow, right_arrow):
+        """Thread-safe helper to update scroll arrows with a delay."""
+        try:
+            # Check if we're in the main thread before using QTimer
+            from PyQt6.QtCore import QThread
+            from PyQt6.QtWidgets import QApplication
+            # Check if we have a QApplication and are in the main thread
+            app = QApplication.instance()
+            # Use the safe timer function
+            safe_single_shot(100, lambda: self.update_scroll_arrows_state(scroll_area, left_arrow, right_arrow))
+        except Exception as e:
+            logger.error(f"Error updating scroll arrows: {e}")
+            # Fallback: update immediately without delay
+            try:
+                self.update_scroll_arrows_state(scroll_area, left_arrow, right_arrow)
+            except Exception as fallback_error:
+                logger.error(f"Fallback scroll arrow update also failed: {fallback_error}")
 
     # --- Helper methods for scrolling, adapted from SearchWidget ---
     def scroll_horizontal_area(self, scroll_area: QScrollArea, direction: int):
@@ -308,7 +388,8 @@ class HomePage(QWidget):
     def update_scroll_arrows_state(self, scroll_area: QScrollArea, left_arrow: QPushButton, right_arrow: QPushButton):
         if not scroll_area.isVisible() or not left_arrow.isVisible() or not right_arrow.isVisible():
              # If any part is not visible (e.g. during setup/teardown), try to defer or skip
-             QTimer.singleShot(50, lambda: self.update_scroll_arrows_state(scroll_area, left_arrow, right_arrow))
+             # Use signal for thread-safe scroll arrow updates
+             self.update_scroll_arrows_signal.emit(scroll_area, left_arrow, right_arrow)
              return
         try:
             h_bar = scroll_area.horizontalScrollBar()

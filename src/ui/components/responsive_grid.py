@@ -211,12 +211,29 @@ class ResponsiveGridWidget(QWidget):
         logger.debug(f"ResponsiveGrid: Resize event {old_width} -> {new_width}")
         
         # Use a debounced approach to avoid excessive relayouts during window dragging
-        self._resize_timer.stop()
-        self._resize_timer.start(50)  # 50ms delay
+        # Check if we're in the main thread before using timer
+        from PyQt6.QtCore import QThread
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app and QThread.currentThread() == app.thread():
+            self._resize_timer.stop()
+            self._resize_timer.start(50)  # 50ms delay
+        else:
+            # We're in a worker thread, relayout immediately
+            self._relayout_cards()
         
     def showEvent(self, event):
         """Handle show events to ensure proper layout."""
         super().showEvent(event)
         # Use a longer delay to allow page navigation to complete first
         if self.cards:
-            QTimer.singleShot(100, self._relayout_cards)  # Reduced delay for better responsiveness 
+            # Check if we're in the main thread before using QTimer
+            from PyQt6.QtCore import QThread
+            from PyQt6.QtWidgets import QApplication
+            # Check if we have a QApplication and are in the main thread
+            app = QApplication.instance()
+            if app and QThread.currentThread() == app.thread():
+                QTimer.singleShot(100, self._relayout_cards)  # Reduced delay for better responsiveness
+            else:
+                # We're in a worker thread, relayout immediately
+                self._relayout_cards() 

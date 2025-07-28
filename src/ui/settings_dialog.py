@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget, QLabel, QGroupBox,
     QFormLayout, QLineEdit, QCheckBox, QComboBox,
-    QSpinBox, QFileDialog, QMessageBox
+    QSpinBox, QFileDialog, QMessageBox, QListWidget
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from src.ui.folder_settings_dialog import FolderSettingsDialog
@@ -16,6 +16,7 @@ import logging
 from typing import Dict, Any
 import requests
 import time
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -114,8 +115,9 @@ class SettingsDialog(QDialog):
         download_form.addRow("Audio Quality:", self.quality_combo)
         
         self.concurrent_downloads = QSpinBox()
-        self.concurrent_downloads.setRange(1, 5)
+        self.concurrent_downloads.setRange(1, 10)  # Allow up to 10 for power users
         self.concurrent_downloads.setValue(3)
+        self.concurrent_downloads.setToolTip("Number of simultaneous downloads (actual threads may be optimized higher for better performance)")
         download_form.addRow("Concurrent Downloads:", self.concurrent_downloads)
         
         self.overwrite_existing = QCheckBox("Overwrite existing files")
@@ -432,6 +434,79 @@ class SettingsDialog(QDialog):
         # Add Spotify tab
         tabs.addTab(spotify_tab, "Spotify")
         
+        # Library Scanner tab
+        library_scanner_tab = QWidget()
+        library_scanner_layout = QVBoxLayout(library_scanner_tab)
+        
+        # Comparison Settings
+        comparison_group = QGroupBox("Comparison Settings")
+        comparison_form = QFormLayout()
+        
+        # Album match threshold
+        self.album_match_threshold = QSpinBox()
+        self.album_match_threshold.setRange(50, 100)
+        self.album_match_threshold.setValue(75)
+        self.album_match_threshold.setSuffix("%")
+        self.album_match_threshold.setToolTip("Lower values = more lenient matching (may include false positives)\nHigher values = stricter matching (may miss some matches)")
+        comparison_form.addRow("Album Match Threshold:", self.album_match_threshold)
+        
+        # Track match threshold
+        self.track_match_threshold = QSpinBox()
+        self.track_match_threshold.setRange(50, 100)
+        self.track_match_threshold.setValue(80)
+        self.track_match_threshold.setSuffix("%")
+        self.track_match_threshold.setToolTip("Lower values = more lenient matching (may include false positives)\nHigher values = stricter matching (may miss some matches)")
+        comparison_form.addRow("Track Match Threshold:", self.track_match_threshold)
+        
+        # Help text
+        help_label = QLabel("Adjust these thresholds if albums are incorrectly marked as missing or found.\n"
+                           "• Album threshold: 60-70% for lenient matching, 80-90% for strict matching\n"
+                           "• Track threshold: Usually 5-10% higher than album threshold")
+        help_label.setStyleSheet("color: #666; font-size: 11px; padding: 10px;")
+        help_label.setWordWrap(True)
+        comparison_form.addRow(help_label)
+        
+        comparison_group.setLayout(comparison_form)
+        library_scanner_layout.addWidget(comparison_group)
+        
+        # Library Paths section
+        paths_group = QGroupBox("Library Paths")
+        paths_layout = QVBoxLayout()
+        
+        # Path input and browse
+        path_input_layout = QHBoxLayout()
+        self.library_path_input = QLineEdit()
+        self.library_path_input.setPlaceholderText("Enter library path...")
+        path_input_layout.addWidget(self.library_path_input)
+        
+        browse_path_btn = QPushButton("Browse")
+        browse_path_btn.clicked.connect(self.browse_library_path)
+        path_input_layout.addWidget(browse_path_btn)
+        
+        add_path_btn = QPushButton("Add Path")
+        add_path_btn.clicked.connect(self.add_library_path)
+        path_input_layout.addWidget(add_path_btn)
+        
+        paths_layout.addLayout(path_input_layout)
+        
+        # Paths list
+        self.library_paths_list = QListWidget()
+        self.library_paths_list.setMaximumHeight(100)
+        paths_layout.addWidget(self.library_paths_list)
+        
+        # Remove path button
+        remove_path_btn = QPushButton("Remove Selected Path")
+        remove_path_btn.clicked.connect(self.remove_library_path)
+        paths_layout.addWidget(remove_path_btn)
+        
+        paths_group.setLayout(paths_layout)
+        library_scanner_layout.addWidget(paths_group)
+        
+        library_scanner_layout.addStretch()
+        
+        # Add Library Scanner tab
+        tabs.addTab(library_scanner_tab, "Library Scanner")
+        
         # Structure tab (renamed from Appearance, now includes file/folder structure)
         structure_tab = QWidget()
         structure_layout = QVBoxLayout(structure_tab)
@@ -452,6 +527,10 @@ class SettingsDialog(QDialog):
         self.playlist_track_template_input = QLineEdit()
         playlist_track_template_layout = self._create_template_input_with_button(self.playlist_track_template_input)
         templates_form.addRow("Playlist Track Template:", playlist_track_template_layout)
+
+        self.compilation_track_template_input = QLineEdit()
+        compilation_track_template_layout = self._create_template_input_with_button(self.compilation_track_template_input)
+        templates_form.addRow("Compilation Track Template:", compilation_track_template_layout)
         
         # Available placeholders info
         placeholders_help = QLabel(
@@ -477,30 +556,7 @@ class SettingsDialog(QDialog):
         folder_group.setLayout(folder_layout)
         structure_layout.addWidget(folder_group)
         
-        # Metadata Handling section
-        metadata_group = QGroupBox("Metadata Settings")
-        metadata_form = QFormLayout()
-        
-        # Album Artist Strategy
-        self.album_artist_strategy = QComboBox()
-        self.album_artist_strategy.addItem("Use Album Artist from API (Recommended)", "album_artist_from_api")
-        self.album_artist_strategy.addItem("Always use Track Artist", "track_artist")
-        self.album_artist_strategy.addItem("Various Artists for Compilations Only", "compilation_aware")
-        
-        strategy_help = QLabel(
-            "Controls how the Album Artist field is set in metadata:\n"
-            "• Album Artist from API: Uses the actual album artist (different from track artist)\n"
-            "• Track Artist: Always copies track artist to album artist\n"
-            "• Compilation Aware: Uses album artist except for 'Various Artists' compilations"
-        )
-        strategy_help.setWordWrap(True)
-        strategy_help.setStyleSheet("font-size: 10px; color: #666; padding: 5px;")
-        
-        metadata_form.addRow("Album Artist Strategy:", self.album_artist_strategy)
-        metadata_form.addRow("", strategy_help)
-        
-        metadata_group.setLayout(metadata_form)
-        structure_layout.addWidget(metadata_group)
+
         
         structure_layout.addStretch()
         
@@ -525,6 +581,34 @@ class SettingsDialog(QDialog):
         button_layout.addWidget(save_button)
         button_layout.addWidget(cancel_button)
         layout.addLayout(button_layout)
+
+    def browse_library_path(self):
+        """Browse for library path."""
+        from PyQt6.QtWidgets import QFileDialog
+        path = QFileDialog.getExistingDirectory(self, "Select Library Path")
+        if path:
+            self.library_path_input.setText(path)
+    
+    def add_library_path(self):
+        """Add library path to the list."""
+        path = self.library_path_input.text().strip()
+        if path and os.path.exists(path):
+            # Check if path already exists
+            for i in range(self.library_paths_list.count()):
+                if self.library_paths_list.item(i).text() == path:
+                    QMessageBox.information(self, "Path Exists", "This path is already in the list.")
+                    return
+            
+            self.library_paths_list.addItem(path)
+            self.library_path_input.clear()
+        else:
+            QMessageBox.warning(self, "Invalid Path", "Please enter a valid directory path.")
+    
+    def remove_library_path(self):
+        """Remove selected library path."""
+        current_row = self.library_paths_list.currentRow()
+        if current_row >= 0:
+            self.library_paths_list.takeItem(current_row)
 
     def _create_template_input_with_button(self, line_edit):
         """Create a layout with a line edit and a placeholder button."""
@@ -709,6 +793,10 @@ class SettingsDialog(QDialog):
         logger.info(f"SettingsDialog.load_settings: Loaded playlist_track_template: {playlist_track_template}")
         self.playlist_track_template_input.setText(playlist_track_template)
         
+        compilation_track_template = self.config.get_setting("downloads.filename_templates.compilation_track", "{track_number:02d} - {artist} - {title}")
+        logger.info(f"SettingsDialog.load_settings: Loaded compilation_track_template: {compilation_track_template}")
+        self.compilation_track_template_input.setText(compilation_track_template)
+        
         # Load artwork settings
         self.save_artwork.setChecked(self.config.get_setting("downloads.saveArtwork", True))
         self.embed_artwork.setChecked(self.config.get_setting("downloads.embedArtwork", True))
@@ -762,12 +850,17 @@ class SettingsDialog(QDialog):
             self.spotify_status_label.setText("Not configured")
             self.spotify_status_label.setStyleSheet("color: #666;")
         
-        # Load metadata settings
-        album_artist_strategy = self.config.get_setting('metadata.album_artist_strategy', 'album_artist_from_api')
-        for i in range(self.album_artist_strategy.count()):
-            if self.album_artist_strategy.itemData(i) == album_artist_strategy:
-                self.album_artist_strategy.setCurrentIndex(i)
-                break
+
+        
+        # Load Library Scanner settings
+        self.album_match_threshold.setValue(self.config.get_setting('library_scanner.album_match_threshold', 75))
+        self.track_match_threshold.setValue(self.config.get_setting('library_scanner.track_match_threshold', 80))
+        
+        # Load library paths
+        self.library_paths_list.clear()
+        library_paths = self.config.get_setting('library_scanner.library_paths', [])
+        for path in library_paths:
+            self.library_paths_list.addItem(path)
 
     def show_folder_settings(self):
         """Show the folder structure settings dialog."""
@@ -888,6 +981,14 @@ class SettingsDialog(QDialog):
             self.config.set_setting("downloads.filename_templates.playlist_track", playlist_track_template_text)
             changes['downloads.filename_templates.playlist_track'] = playlist_track_template_text
 
+        compilation_track_template_text = self.compilation_track_template_input.text()
+        old_compilation_track_template = self.config.get_setting("downloads.filename_templates.compilation_track", "{track_number:02d} - {artist} - {title}")
+        logger.info(f"SettingsDialog.save_settings: UI compilation_track_template_text: {compilation_track_template_text}, Current Config: {old_compilation_track_template}")
+        if compilation_track_template_text != old_compilation_track_template:
+            logger.info(f"Saving Compilation Track Template: {compilation_track_template_text}")
+            self.config.set_setting("downloads.filename_templates.compilation_track", compilation_track_template_text)
+            changes['downloads.filename_templates.compilation_track'] = compilation_track_template_text
+
         # Save artwork settings
         save_artwork = self.save_artwork.isChecked()
         old_save_artwork = self.config.get_setting('downloads.saveArtwork', True)
@@ -1005,11 +1106,7 @@ class SettingsDialog(QDialog):
             self.config.set_setting('lyrics.encoding', encoding)
             changes['lyrics.encoding'] = encoding
         
-        # Save metadata settings
-        album_artist_strategy = self.album_artist_strategy.currentData()
-        if album_artist_strategy != self.config.get_setting('metadata.album_artist_strategy'):
-            self.config.set_setting('metadata.album_artist_strategy', album_artist_strategy)
-            changes['metadata.album_artist_strategy'] = album_artist_strategy
+
         
         # Save Spotify settings
         spotify_client_id = self.spotify_client_id.text().strip()
@@ -1036,6 +1133,27 @@ class SettingsDialog(QDialog):
         if auto_download != self.config.get_setting('spotify.auto_download_playlist'):
             self.config.set_setting('spotify.auto_download_playlist', auto_download)
             changes['spotify.auto_download_playlist'] = auto_download
+        
+        # Save Library Scanner settings
+        album_threshold = self.album_match_threshold.value()
+        if album_threshold != self.config.get_setting('library_scanner.album_match_threshold'):
+            self.config.set_setting('library_scanner.album_match_threshold', album_threshold)
+            changes['library_scanner.album_match_threshold'] = album_threshold
+            
+        track_threshold = self.track_match_threshold.value()
+        if track_threshold != self.config.get_setting('library_scanner.track_match_threshold'):
+            self.config.set_setting('library_scanner.track_match_threshold', track_threshold)
+            changes['library_scanner.track_match_threshold'] = track_threshold
+        
+        # Save library paths
+        current_paths = []
+        for i in range(self.library_paths_list.count()):
+            current_paths.append(self.library_paths_list.item(i).text())
+        
+        old_paths = self.config.get_setting('library_scanner.library_paths', [])
+        if current_paths != old_paths:
+            self.config.set_setting('library_scanner.library_paths', current_paths)
+            changes['library_scanner.library_paths'] = current_paths
             
         # Save all settings
         self.config.save_config()
@@ -1065,6 +1183,7 @@ class SettingsDialog(QDialog):
             self.track_template_input.setText("{artist} - {title}")
             self.album_track_template_input.setText("{track_number:02d} - {album_artist} - {title}")
             self.playlist_track_template_input.setText("{playlist_position:02d} - {artist} - {title}")
+            self.compilation_track_template_input.setText("{track_number:02d} - {artist} - {title}")
 
             # Reset artwork settings
             self.save_artwork.setChecked(True)
@@ -1087,6 +1206,11 @@ class SettingsDialog(QDialog):
             self.use_for_api.setChecked(True)
             self.use_for_downloads.setChecked(True)
             
+            # Reset Library Scanner settings
+            self.album_match_threshold.setValue(75)
+            self.track_match_threshold.setValue(80)
+            self.library_paths_list.clear()
+            
             # Reset lyrics settings
             self.lrc_enabled.setChecked(True)
             self.txt_enabled.setChecked(True)
@@ -1107,8 +1231,7 @@ class SettingsDialog(QDialog):
             self.spotify_status_label.setText("Not configured")
             self.spotify_status_label.setStyleSheet("color: #666;")
             
-            # Reset metadata settings
-            self.album_artist_strategy.setCurrentIndex(0)  # Set to first option (album_artist_from_api)
+
             
             # Save all settings
             self.config.save_config()

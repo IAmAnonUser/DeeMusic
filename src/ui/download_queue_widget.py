@@ -9,12 +9,32 @@ from PyQt6.QtCore import Qt
 import logging
 import json
 from pathlib import Path
+import sys
+import os
 
 from .components.download_item_widget import DownloadItemWidget
 # Import new group item widgets
 from .components.download_group_item_widget import AlbumGroupItemWidget, PlaylistGroupItemWidget
 
 logger = logging.getLogger(__name__)
+
+# Helper to get the correct queue state path
+def get_queue_state_path():
+    app_name = "DeeMusic"
+    if sys.platform == "win32":
+        appdata = os.getenv('APPDATA')
+        if appdata:
+            return Path(appdata) / app_name / 'download_queue_state.json'
+        else:
+            return Path.home() / app_name / 'download_queue_state.json'
+    elif sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / app_name / 'download_queue_state.json'
+    else:
+        xdg_config_home = os.getenv('XDG_CONFIG_HOME')
+        if xdg_config_home:
+            return Path(xdg_config_home) / app_name / 'download_queue_state.json'
+        else:
+            return Path.home() / ".config" / app_name / 'download_queue_state.json'
 
 class RetryOptionsDialog(QDialog):
     """Dialog to show retry options including proxy settings."""
@@ -114,10 +134,53 @@ class DownloadQueueWidget(QWidget):
         if not self.download_manager and download_manager:
             self.download_manager = download_manager
             self._connect_signals()
+            # Check for inconsistent state after connecting
+            self._check_and_fix_inconsistent_state()
         elif self.download_manager and download_manager and self.download_manager != download_manager:
             logger.warning("[DownloadQueueWidget] Attempting to change DownloadManager.")
             self.download_manager = download_manager
-            self._connect_signals() 
+            self._connect_signals()
+            self._check_and_fix_inconsistent_state()
+
+    def _check_and_fix_inconsistent_state(self):
+        """Check for inconsistent state between UI and persistent storage and fix it."""
+        try:
+            if not self.download_manager:
+                return
+            
+            queue_state_path = self.download_manager._get_queue_state_path()
+            has_ui_items = (len(self.active_individual_tracks) > 0 or 
+                           len(self.active_album_groups) > 0 or 
+                           len(self.active_playlist_groups) > 0)
+            
+            # Case 1: UI has items but no queue state file exists
+            if has_ui_items and not queue_state_path.exists():
+                logger.warning("[DownloadQueueWidget] Inconsistent state detected: UI has items but no queue state file")
+                logger.info("[DownloadQueueWidget] Auto-fixing by clearing UI state")
+                self.force_clear_ui_state()
+                return
+            
+            # Case 2: No UI items but queue state file exists with content
+            if not has_ui_items and queue_state_path.exists():
+                try:
+                    with open(queue_state_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    
+                    has_unfinished = len(data.get('unfinished_downloads', [])) > 0
+                    has_completed = len(data.get('completed_downloads', [])) > 0
+                    has_failed = len(data.get('failed_downloads', [])) > 0
+                    
+                    if has_unfinished or has_completed or has_failed:
+                        logger.info("[DownloadQueueWidget] Queue state file has content but UI is empty - this is normal after restart")
+                        # This is actually normal behavior after app restart, don't auto-fix
+                        
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not read queue state file: {e}")
+            
+            logger.debug("[DownloadQueueWidget] Queue state consistency check completed")
+            
+        except Exception as e:
+            logger.error(f"[DownloadQueueWidget] Error checking queue state consistency: {e}") 
 
     def _connect_signals(self):
         """Connects to signals from the DownloadManager."""
@@ -152,7 +215,14 @@ class DownloadQueueWidget(QWidget):
         self.clear_queue_button = QPushButton("Clear All") # Renamed for clarity
         self.clear_queue_button.setObjectName("ClearQueueButton")
         self.clear_queue_button.clicked.connect(self._handle_clear_all_clicked)
+        
+        # Add a button to specifically clear stuck pending downloads
+        self.clear_pending_button = QPushButton("Clear Pending")
+        self.clear_pending_button.setObjectName("ClearPendingButton")
+        self.clear_pending_button.clicked.connect(self._handle_clear_pending_clicked)
+        self.clear_pending_button.setToolTip("Clear stuck pending downloads from previous sessions")
         action_buttons_layout.addWidget(self.clear_queue_button)
+        action_buttons_layout.addWidget(self.clear_pending_button)
         self.clear_completed_button = QPushButton("Clear Completed")
         self.clear_completed_button.setObjectName("ClearCompletedButton")
         self.clear_completed_button.clicked.connect(self._handle_clear_completed_clicked)
@@ -310,67 +380,331 @@ class DownloadQueueWidget(QWidget):
 
     def _handle_clear_all_clicked(self):
         logger.info("[DownloadQueueWidget] 'Clear All' clicked.")
-        # Clear individual tracks
-        for track_id in list(self.active_individual_tracks.keys()):
-            widget = self.active_individual_tracks.pop(track_id)
-            self._remove_widget_from_layout(widget)
-            # Optionally, tell DownloadManager to cancel if it's an ongoing individual track
-            if self.download_manager and widget.status not in ["completed", "failed"]:
-                try: self.download_manager.cancel_download(int(track_id)) # Assuming track_id is numeric
-                except: pass # Ignore errors during cancel call for cleanup
-
-        # Clear album groups
-        for album_id in list(self.active_album_groups.keys()):
-            group_widget = self.active_album_groups.pop(album_id)
-            # Optionally, tell DownloadManager to cancel all tracks in this group
-            # This needs more sophisticated logic in DownloadManager or group widget
-            for track_id_in_group in group_widget.get_managed_track_ids():
-                 if track_id_in_group in self.track_to_group_map: del self.track_to_group_map[track_id_in_group]
-                 # DM cancel for each track in group
-                 if self.download_manager: 
-                     try: self.download_manager.cancel_download(int(track_id_in_group))
-                     except: pass
-            self._remove_widget_from_layout(group_widget)
-
-        # Clear playlist groups
-        for playlist_id in list(self.active_playlist_groups.keys()):
-            group_widget = self.active_playlist_groups.pop(playlist_id)
-            for track_id_in_group in group_widget.get_managed_track_ids():
-                 if track_id_in_group in self.track_to_group_map: del self.track_to_group_map[track_id_in_group]
-                 if self.download_manager: 
-                     try: self.download_manager.cancel_download(int(track_id_in_group))
-                     except: pass
-            self._remove_widget_from_layout(group_widget)
         
-        self.track_to_group_map.clear()
+        try:
+            # First, disable file watcher to prevent automatic reload
+            if self.download_manager and hasattr(self.download_manager, 'queue_file_watcher'):
+                try:
+                    queue_state_path = self.download_manager._get_queue_state_path()
+                    watched_files = self.download_manager.queue_file_watcher.files()
+                    if str(queue_state_path) in watched_files:
+                        self.download_manager.queue_file_watcher.removePath(str(queue_state_path))
+                        logger.debug("[DownloadQueueWidget] Temporarily disabled file watcher for clear all operation")
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not disable file watcher: {e}")
+            
+            # Stop all active workers first - IMPROVED VERSION
+            if self.download_manager:
+                active_workers_count = len(self.download_manager.active_workers)
+                logger.info(f"[DownloadQueueWidget] Stopping {active_workers_count} active download workers...")
+                
+                # Step 1: Disconnect signals to prevent any completion signals from being processed
+                try:
+                    if hasattr(self.download_manager, 'signals'):
+                        # Temporarily disconnect signals to prevent race conditions
+                        self.download_manager.signals.download_finished.disconnect()
+                        self.download_manager.signals.download_failed.disconnect()
+                        logger.debug("[DownloadQueueWidget] Temporarily disconnected download signals")
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not disconnect signals: {e}")
+                
+                # Step 2: Stop all workers and wait for them to acknowledge the stop
+                workers_to_stop = list(self.download_manager.active_workers.items())
+                for worker_id, worker in workers_to_stop:
+                    logger.debug(f"Requesting stop for worker: {worker_id}")
+                    worker.stop()
+                
+                # Step 3: Wait a short time for workers to acknowledge stop
+                import time
+                time.sleep(0.2)  # Give workers more time to check _is_stopping flag
+                
+                # Step 4: Force clear the active workers tracking
+                self.download_manager.active_workers.clear()
+                if hasattr(self.download_manager, 'downloads'):
+                    self.download_manager.downloads.clear()
+                
+                # Step 4.5: Clear any pending queue operations
+                if hasattr(self.download_manager, '_pending_queue_save'):
+                    self.download_manager._pending_queue_save = False
+                
+                # Step 5: Reconnect signals for future downloads
+                try:
+                    if hasattr(self.download_manager, 'signals'):
+                        self.download_manager.signals.download_finished.connect(self._handle_download_finished)
+                        self.download_manager.signals.download_failed.connect(self._handle_download_failed)
+                        logger.debug("[DownloadQueueWidget] Reconnected download signals")
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not reconnect signals: {e}")
+                
+                logger.info("[DownloadQueueWidget] All active workers stopped and signals managed")
+            
+            # Clear UI state
+            # Clear individual tracks
+            for track_id in list(self.active_individual_tracks.keys()):
+                widget = self.active_individual_tracks.pop(track_id)
+                self._remove_widget_from_layout(widget)
+            
+            # Clear album groups
+            for album_id in list(self.active_album_groups.keys()):
+                group_widget = self.active_album_groups.pop(album_id)
+                for track_id_in_group in group_widget.get_managed_track_ids():
+                    if track_id_in_group in self.track_to_group_map:
+                        del self.track_to_group_map[track_id_in_group]
+                self._remove_widget_from_layout(group_widget)
+
+            # Clear playlist groups
+            for playlist_id in list(self.active_playlist_groups.keys()):
+                group_widget = self.active_playlist_groups.pop(playlist_id)
+                for track_id_in_group in group_widget.get_managed_track_ids():
+                    if track_id_in_group in self.track_to_group_map:
+                        del self.track_to_group_map[track_id_in_group]
+                self._remove_widget_from_layout(group_widget)
+            
+            self.track_to_group_map.clear()
+            
+            # Clear the persistent queue state completely
+            if self.download_manager:
+                try:
+                    self.download_manager.clear_all_queue_state()
+                    logger.info("[DownloadQueueWidget] Cleared all queue state from download manager")
+                except Exception as e:
+                    logger.error(f"[DownloadQueueWidget] Failed to clear queue state from download manager: {e}")
+                    # Fallback to direct file clearing
+                    self.clear_queue_state_file()
+            else:
+                # Fallback to direct file clearing
+                self.clear_queue_state_file()
+            
+            # Re-enable file watcher
+            if self.download_manager and hasattr(self.download_manager, 'queue_file_watcher'):
+                try:
+                    queue_state_path = self.download_manager._get_queue_state_path()
+                    # Only re-add if file still exists after clearing
+                    if queue_state_path.exists():
+                        self.download_manager.queue_file_watcher.addPath(str(queue_state_path))
+                        logger.debug("[DownloadQueueWidget] Re-enabled file watcher after clear all operation")
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not re-enable file watcher: {e}")
+            
+            # Verification step: Check if everything is actually cleared
+            self._verify_clear_all_success()
+            
+            logger.info("[DownloadQueueWidget] All downloads cancelled and queue cleared")
+            
+        except Exception as e:
+            logger.error(f"Error in Clear All: {e}", exc_info=True)
+
+    def _verify_clear_all_success(self):
+        """Verify that clear all operation was successful and fix any lingering issues."""
+        try:
+            issues_found = []
+            
+            # Check UI state
+            if self.active_individual_tracks:
+                issues_found.append(f"{len(self.active_individual_tracks)} individual tracks still in UI")
+                self.active_individual_tracks.clear()
+            
+            if self.active_album_groups:
+                issues_found.append(f"{len(self.active_album_groups)} album groups still in UI")
+                self.active_album_groups.clear()
+            
+            if self.active_playlist_groups:
+                issues_found.append(f"{len(self.active_playlist_groups)} playlist groups still in UI")
+                self.active_playlist_groups.clear()
+            
+            if self.track_to_group_map:
+                issues_found.append(f"{len(self.track_to_group_map)} track mappings still exist")
+                self.track_to_group_map.clear()
+            
+            # Check download manager state
+            if self.download_manager:
+                if self.download_manager.active_workers:
+                    issues_found.append(f"{len(self.download_manager.active_workers)} active workers still exist")
+                    self.download_manager.active_workers.clear()
+                
+                # Check if queue file still exists
+                queue_state_path = self.download_manager._get_queue_state_path()
+                if queue_state_path.exists():
+                    issues_found.append("Queue state file still exists")
+                    try:
+                        queue_state_path.unlink()
+                        logger.info("[DownloadQueueWidget] Removed lingering queue state file")
+                    except Exception as e:
+                        logger.error(f"[DownloadQueueWidget] Could not remove queue state file: {e}")
+            
+            if issues_found:
+                logger.warning(f"[DownloadQueueWidget] Clear All verification found issues: {', '.join(issues_found)}")
+                logger.info("[DownloadQueueWidget] Issues have been automatically fixed")
+            else:
+                logger.info("[DownloadQueueWidget] Clear All verification passed - everything properly cleared")
+                
+        except Exception as e:
+            logger.error(f"[DownloadQueueWidget] Error during clear all verification: {e}")
+
+    def _handle_clear_pending_clicked(self):
+        """Clear only stuck pending downloads from previous sessions."""
+        logger.info("[DownloadQueueWidget] 'Clear Pending' clicked.")
+        
+        try:
+            if self.download_manager:
+                # Clear only unfinished downloads from the queue state
+                self.download_manager.clear_pending_downloads()
+                logger.info("[DownloadQueueWidget] Cleared pending downloads")
+                
+                # Force refresh the UI
+                self.refresh_queue_display()
+                logger.info("[DownloadQueueWidget] Refreshed UI after clearing pending downloads")
+            else:
+                logger.warning("[DownloadQueueWidget] No download manager available for clearing pending downloads")
+                
+        except Exception as e:
+            logger.error(f"Error clearing pending downloads: {e}", exc_info=True)
 
     def _handle_clear_completed_clicked(self):
         logger.info("[DownloadQueueWidget] 'Clear Completed' clicked.")
-        # For individual tracks
-        for track_id in list(self.active_individual_tracks.keys()):
-            widget = self.active_individual_tracks[track_id]
-            if hasattr(widget, 'status') and widget.status == "completed":
-                self._remove_widget_from_layout(self.active_individual_tracks.pop(track_id))
+        
+        try:
+            # First, disable file watcher to prevent automatic reload
+            if self.download_manager and hasattr(self.download_manager, 'queue_file_watcher'):
+                try:
+                    queue_state_path = self.download_manager._get_queue_state_path()
+                    watched_files = self.download_manager.queue_file_watcher.files()
+                    if str(queue_state_path) in watched_files:
+                        self.download_manager.queue_file_watcher.removePath(str(queue_state_path))
+                        logger.debug("[DownloadQueueWidget] Temporarily disabled file watcher for clear completed operation")
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not disable file watcher: {e}")
+            
+            # CRITICAL: Apply same race condition prevention as clear all
+            # Step 1: Disconnect signals to prevent any completion signals from being processed
+            try:
+                if self.download_manager and hasattr(self.download_manager, 'signals'):
+                    # Temporarily disconnect signals to prevent race conditions
+                    self.download_manager.signals.download_finished.disconnect()
+                    self.download_manager.signals.download_failed.disconnect()
+                    logger.debug("[DownloadQueueWidget] Temporarily disconnected download signals for clear completed")
+            except Exception as e:
+                logger.warning(f"[DownloadQueueWidget] Could not disconnect signals: {e}")
+            
+            # Step 2: Set clearing flag in download manager to prevent signal processing
+            if self.download_manager:
+                self.download_manager._clearing_queue = True
+                logger.info("[DownloadQueueWidget] Set clearing queue flag for clear completed operation")
+            
+            # Step 3: Identify completed items and stop any related workers that might still be running
+            completed_track_ids = []
+            completed_album_ids = []
+            completed_playlist_ids = []
+            
+            # Identify completed individual tracks
+            for track_id, widget in self.active_individual_tracks.items():
+                if hasattr(widget, 'status') and widget.status == "completed":
+                    completed_track_ids.append(track_id)
+            
+            # Identify completed album groups
+            for album_id, group_widget in self.active_album_groups.items():
+                if group_widget.overall_status == "Completed" or \
+                   (group_widget.overall_status == "Completed with errors" and 
+                    group_widget.completed_tracks_count + group_widget.failed_tracks_count == group_widget.total_tracks):
+                    completed_album_ids.append(album_id)
+                    # Add all tracks from this album to completed list
+                    for track_id in group_widget.get_managed_track_ids():
+                        completed_track_ids.append(track_id)
+            
+            # Identify completed playlist groups
+            for playlist_id, group_widget in self.active_playlist_groups.items():
+                if group_widget.overall_status == "Completed" or \
+                   (group_widget.overall_status == "Completed with errors" and 
+                    group_widget.completed_tracks_count + group_widget.failed_tracks_count == group_widget.total_tracks):
+                    completed_playlist_ids.append(playlist_id)
+                    # Add all tracks from this playlist to completed list
+                    for track_id in group_widget.get_managed_track_ids():
+                        completed_track_ids.append(track_id)
+            
+            # Step 4: Stop any workers that are still running for completed items
+            if self.download_manager and completed_track_ids:
+                logger.info(f"[DownloadQueueWidget] Stopping {len(completed_track_ids)} workers for completed items")
+                
+                # Stop workers more aggressively
+                for track_id in completed_track_ids:
+                    if track_id in self.download_manager.active_workers:
+                        worker = self.download_manager.active_workers[track_id]
+                        logger.debug(f"Stopping worker for completed track: {track_id}")
+                        worker.stop()
+                        
+                        # Also remove from active workers immediately to prevent any further processing
+                        try:
+                            del self.download_manager.active_workers[track_id]
+                            logger.debug(f"Removed worker {track_id} from active workers list")
+                        except KeyError:
+                            pass  # Already removed
+                
+                # Wait briefly for workers to acknowledge stop
+                import time
+                time.sleep(0.2)  # Increased wait time to ensure stop is processed
+            
+            # Step 5: Clear completed downloads from the persistent queue state
+            if self.download_manager:
+                try:
+                    self.download_manager.clear_completed_downloads()
+                    logger.info("[DownloadQueueWidget] Cleared completed downloads from persistent state")
+                except Exception as e:
+                    logger.error(f"[DownloadQueueWidget] Failed to clear completed downloads from persistent state: {e}")
+            
+            # Step 6: Clear UI state for completed items
+            # For individual tracks
+            for track_id in list(self.active_individual_tracks.keys()):
+                widget = self.active_individual_tracks[track_id]
+                if hasattr(widget, 'status') and widget.status == "completed":
+                    self._remove_widget_from_layout(self.active_individual_tracks.pop(track_id))
 
-        # For album groups - remove group if ALL its tracks are completed or failed
-        for album_id in list(self.active_album_groups.keys()):
-            group_widget = self.active_album_groups[album_id]
-            if group_widget.overall_status == "Completed" or \
-               (group_widget.overall_status == "Completed with errors" and 
-                group_widget.completed_tracks_count + group_widget.failed_tracks_count == group_widget.total_tracks):
-                for track_id_in_group in group_widget.get_managed_track_ids():
-                    if track_id_in_group in self.track_to_group_map: del self.track_to_group_map[track_id_in_group]
-                self._remove_widget_from_layout(self.active_album_groups.pop(album_id))
+            # For album groups - remove completed groups
+            for album_id in completed_album_ids:
+                if album_id in self.active_album_groups:
+                    group_widget = self.active_album_groups.pop(album_id)
+                    for track_id_in_group in group_widget.get_managed_track_ids():
+                        if track_id_in_group in self.track_to_group_map:
+                            del self.track_to_group_map[track_id_in_group]
+                    self._remove_widget_from_layout(group_widget)
 
-        # For playlist groups - similar logic
-        for playlist_id in list(self.active_playlist_groups.keys()):
-            group_widget = self.active_playlist_groups[playlist_id]
-            if group_widget.overall_status == "Completed" or \
-               (group_widget.overall_status == "Completed with errors" and 
-                group_widget.completed_tracks_count + group_widget.failed_tracks_count == group_widget.total_tracks):
-                for track_id_in_group in group_widget.get_managed_track_ids():
-                    if track_id_in_group in self.track_to_group_map: del self.track_to_group_map[track_id_in_group]
-                self._remove_widget_from_layout(self.active_playlist_groups.pop(playlist_id))
+            # For playlist groups - remove completed groups
+            for playlist_id in completed_playlist_ids:
+                if playlist_id in self.active_playlist_groups:
+                    group_widget = self.active_playlist_groups.pop(playlist_id)
+                    for track_id_in_group in group_widget.get_managed_track_ids():
+                        if track_id_in_group in self.track_to_group_map:
+                            del self.track_to_group_map[track_id_in_group]
+                    self._remove_widget_from_layout(group_widget)
+            
+            logger.info("[DownloadQueueWidget] Clear completed operation finished")
+            
+        except Exception as e:
+            logger.error(f"[DownloadQueueWidget] Error in clear completed: {e}", exc_info=True)
+        finally:
+            # Step 7: Always restore normal operation
+            # Reset clearing flag
+            if self.download_manager:
+                self.download_manager._clearing_queue = False
+                logger.info("[DownloadQueueWidget] Cleared clearing queue flag after clear completed")
+            
+            # Reconnect signals
+            try:
+                if self.download_manager and hasattr(self.download_manager, 'signals'):
+                    self.download_manager.signals.download_finished.connect(self._handle_download_finished)
+                    self.download_manager.signals.download_failed.connect(self._handle_download_failed)
+                    logger.debug("[DownloadQueueWidget] Reconnected download signals after clear completed")
+            except Exception as e:
+                logger.warning(f"[DownloadQueueWidget] Could not reconnect signals: {e}")
+            
+            # Re-enable file watcher
+            if self.download_manager and hasattr(self.download_manager, 'queue_file_watcher'):
+                try:
+                    queue_state_path = self.download_manager._get_queue_state_path()
+                    if queue_state_path.exists():
+                        self.download_manager.queue_file_watcher.addPath(str(queue_state_path))
+                        logger.debug("[DownloadQueueWidget] Re-enabled file watcher after clear completed operation")
+                except Exception as e:
+                    logger.warning(f"[DownloadQueueWidget] Could not re-enable file watcher: {e}")
 
     def _handle_retry_failed_clicked(self):
         logger.info("[DownloadQueueWidget] 'Retry Failed' clicked.")
@@ -535,7 +869,18 @@ class DownloadQueueWidget(QWidget):
     def save_queue_state(self):
         """Saves the current state of the download queue to a file."""
         try:
+            # Load existing queue state to preserve unfinished_downloads from Library Scanner
+            existing_state = {}
+            file_path = get_queue_state_path()
+            if file_path.exists():
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        existing_state = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Could not load existing queue state: {e}")
+            
             queue_state = {
+                'unfinished_downloads': existing_state.get('unfinished_downloads', []),  # Preserve from Library Scanner
                 'failed_downloads': [],
                 'completed_downloads': []
             }
@@ -628,8 +973,9 @@ class DownloadQueueWidget(QWidget):
                         'completed_tracks': completed_tracks
                     })
             
-            file_path = Path('download_queue_state.json')
-            with open(file_path, 'w') as f:
+            file_path = get_queue_state_path()
+            file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(queue_state, f, indent=2)
             
             logger.debug(f"[DownloadQueueWidget] Queue state saved: {len(queue_state['failed_downloads'])} failed, {len(queue_state['completed_downloads'])} completed")
@@ -638,17 +984,50 @@ class DownloadQueueWidget(QWidget):
             logger.error(f"[DownloadQueueWidget] Failed to save queue state: {e}")
 
     def load_queue_state(self):
-        """Loads failed downloads from previous session and displays them."""
+        """Loads unfinished and failed downloads from previous session and displays them."""
         try:
-            file_path = Path('download_queue_state.json')
+            file_path = get_queue_state_path()
             if not file_path.exists():
-                logger.debug("[DownloadQueueWidget] No previous queue state file found")
+                logger.debug(f"[DownloadQueueWidget] No previous queue state file found at {file_path}")
                 return
                 
-            with open(file_path, 'r') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 queue_state = json.load(f)
             
+            # Load unfinished downloads (pending albums)
+            unfinished_downloads = queue_state.get('unfinished_downloads', [])
             failed_downloads = queue_state.get('failed_downloads', [])
+            
+            # Display unfinished downloads first
+            if unfinished_downloads:
+                logger.info(f"[DownloadQueueWidget] Loading {len(unfinished_downloads)} unfinished downloads")
+                
+                # Add a separator label for pending downloads
+                separator_label = QLabel("Pending Downloads")
+                separator_label.setObjectName("DownloadQueueSeparator")
+                separator_label.setStyleSheet("color: #4CAF50; font-weight: bold; margin: 10px 0;")
+                self.items_layout.addWidget(separator_label)
+                
+                # Create widgets for unfinished album downloads
+                for unfinished_item in unfinished_downloads:
+                    if unfinished_item.get('type') == 'album':
+                        album_id = unfinished_item.get('album_id')
+                        album_title = unfinished_item.get('album_title', 'Unknown Album')
+                        artist_name = unfinished_item.get('artist_name', 'Unknown Artist')
+                        queued_tracks = unfinished_item.get('queued_tracks', [])
+                        total_tracks = len(queued_tracks)
+                        
+                        logger.info(f"[DownloadQueueWidget] Creating widget for pending album: {artist_name} - {album_title} ({total_tracks} tracks)")
+                        
+                        group_widget = AlbumGroupItemWidget(
+                            album_id=album_id,
+                            album_title=album_title,
+                            artist_name=artist_name,
+                            total_tracks=total_tracks
+                        )
+                        
+                        self.items_layout.addWidget(group_widget)
+                        # Note: Don't add to active_album_groups yet since download hasn't started
             
             if failed_downloads:
                 # Add a separator label
@@ -728,12 +1107,51 @@ class DownloadQueueWidget(QWidget):
     def clear_queue_state_file(self):
         """Clears the saved queue state file."""
         try:
-            file_path = Path('download_queue_state.json')
+            file_path = get_queue_state_path()
             if file_path.exists():
                 file_path.unlink()
-                logger.debug("[DownloadQueueWidget] Queue state file cleared")
+                logger.debug(f"[DownloadQueueWidget] Queue state file cleared at {file_path}")
+            else:
+                logger.debug(f"[DownloadQueueWidget] Queue state file doesn't exist at {file_path}")
         except Exception as e:
             logger.error(f"[DownloadQueueWidget] Failed to clear queue state file: {e}")
+
+    def force_clear_ui_state(self):
+        """Force clear all UI state when queue file is missing but items are stuck."""
+        logger.info("[DownloadQueueWidget] Force clearing UI state...")
+        
+        try:
+            # Clear all UI widgets
+            for track_id in list(self.active_individual_tracks.keys()):
+                widget = self.active_individual_tracks.pop(track_id)
+                self._remove_widget_from_layout(widget)
+            
+            for album_id in list(self.active_album_groups.keys()):
+                group_widget = self.active_album_groups.pop(album_id)
+                for track_id_in_group in group_widget.get_managed_track_ids():
+                    if track_id_in_group in self.track_to_group_map:
+                        del self.track_to_group_map[track_id_in_group]
+                self._remove_widget_from_layout(group_widget)
+
+            for playlist_id in list(self.active_playlist_groups.keys()):
+                group_widget = self.active_playlist_groups.pop(playlist_id)
+                for track_id_in_group in group_widget.get_managed_track_ids():
+                    if track_id_in_group in self.track_to_group_map:
+                        del self.track_to_group_map[track_id_in_group]
+                self._remove_widget_from_layout(group_widget)
+            
+            self.track_to_group_map.clear()
+            
+            # Clear download manager state
+            if self.download_manager:
+                self.download_manager.active_workers.clear()
+                if hasattr(self.download_manager, 'downloads'):
+                    self.download_manager.downloads.clear()
+            
+            logger.info("[DownloadQueueWidget] Force clear UI state completed")
+            
+        except Exception as e:
+            logger.error(f"[DownloadQueueWidget] Error in force clear UI state: {e}", exc_info=True)
 
     def _handle_individual_retry(self, track_id_str: str):
         logger.info(f"[DownloadQueueWidget] Individual retry requested for track: {track_id_str}")

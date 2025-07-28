@@ -1423,16 +1423,18 @@ class DeezerAPI:
                         raw_track_data_from_api = track_data_response.get('results', {}).get('DATA', {})
                         
                         # TEMPORARY DEBUG LOGGING:
-                        logger.debug(f"SYNC Raw DATA for track {track_id}: {raw_track_data_from_api}") 
-                        logger.debug(f"SYNC Keys in raw DATA for track {track_id}: {list(raw_track_data_from_api.keys())}")
+                        logger.info(f"SYNC Raw DATA for track {track_id}: Keys = {list(raw_track_data_from_api.keys())}") 
+                        
+                        # Check for track number fields in raw data
+                        track_fields = {k: v for k, v in raw_track_data_from_api.items() if 'track' in k.lower() or 'position' in k.lower() or 'number' in k.lower()}
+                        logger.info(f"SYNC Track-related fields for {track_id}: {track_fields}")
 
                         # Process data (this function should handle key conversion, etc.)
                         processed_track_info = self._process_track_data_private(raw_track_data_from_api, str(track_id))
                         
                         if processed_track_info:
                              # TEMPORARY DEBUG LOGGING FOR PROCESSED INFO:
-                            logger.debug(f"SYNC Processed track_info for {track_id}: {processed_track_info}")
-                            logger.debug(f"SYNC Keys in processed track_info for {track_id}: {list(processed_track_info.keys())}")
+                            logger.info(f"SYNC Processed track_info for {track_id}: track_number={processed_track_info.get('track_number')}, track_position={processed_track_info.get('track_position')}")
                             # Specifically check for disk_number
                             logger.debug(f"SYNC disk_number in processed_track_info: {processed_track_info.get('disk_number')}")
 
@@ -1584,7 +1586,7 @@ class DeezerAPI:
             'track_token': 'TRACK_TOKEN',
             'track_token_expire': 'TRACK_TOKEN_EXPIRE',
             'disk_number': 'DISK_NUMBER',
-            'track_number': 'TRACK_NUMBER', # often 'track_position' in other contexts
+            'track_number': 'SNG_TRACK_NUMBER', # Deezer uses SNG_TRACK_NUMBER for track position
             'duration': 'DURATION',
             'release_date': 'PHYSICAL_RELEASE_DATE', # Or just 'release_date' if that's primary
             'gain': 'GAIN',
@@ -1598,22 +1600,56 @@ class DeezerAPI:
         for target_key, source_key_uc in key_mappings_to_ensure.items():
             if target_key not in processed_info: # If not already set by initial lowercase conversion
                 if source_key_uc in raw_data:
-                    processed_info[target_key] = raw_data[source_key_uc]
+                    value = raw_data[source_key_uc]
+                    # Convert numeric fields to int
+                    if target_key in ['disk_number', 'track_number', 'duration'] and value is not None:
+                        try:
+                            processed_info[target_key] = int(value)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Could not convert {target_key} value '{value}' to int for {track_id_str}")
+                            processed_info[target_key] = 1 if target_key in ['disk_number', 'track_number'] else 0
+                    else:
+                        processed_info[target_key] = value
                 else:
                     logger.debug(f"Key '{target_key}' (from '{source_key_uc}') not found in raw_data for {track_id_str}")
                     # Set a sensible default or leave as None if appropriate
                     if target_key in ['disk_number', 'track_number', 'duration']:
-                        processed_info[target_key] = processed_info.get(target_key, 0) # Default to 0 for numerical
+                        # Try alternative field names for track number
+                        if target_key == 'track_number':
+                            # Try multiple possible field names, prioritizing SNG_TRACK_NUMBER
+                            alt_value = (raw_data.get('SNG_TRACK_NUMBER') or 
+                                       raw_data.get('TRACK_POSITION') or 
+                                       raw_data.get('POSITION') or 
+                                       raw_data.get('track_position') or
+                                       raw_data.get('position'))
+                            if alt_value:
+                                processed_info[target_key] = int(alt_value)
+                                logger.debug(f"Found track number from alternative field for {track_id_str}: {alt_value}")
+                            else:
+                                processed_info[target_key] = 1  # Default to 1 instead of 0
+                                logger.warning(f"No track number found for {track_id_str}, defaulting to 1")
+                        else:
+                            processed_info[target_key] = processed_info.get(target_key, 0) # Default to 0 for other numerical
                     elif target_key in ['track_token']: # Critical, should log if missing
                         logger.warning(f"Critical key '{target_key}' is missing for {track_id_str}")
                         processed_info[target_key] = None
                     else:
                         processed_info[target_key] = None # Default to None for others
 
-        # Ensure 'track_position' is also populated if 'track_number' exists
-        if 'track_number' in processed_info and 'track_position' not in processed_info:
+        # Ensure 'track_position' always matches 'track_number' (they should be the same)
+        if 'track_number' in processed_info:
             processed_info['track_position'] = processed_info['track_number']
-            logger.debug(f"Copied track_number to track_position for {track_id_str}")
+            logger.info(f"Set track_position to match track_number ({processed_info['track_number']}) for {track_id_str}")
+        
+        # Debug track position information
+        track_num = processed_info.get('track_number', 0)
+        track_pos = processed_info.get('track_position', 0)
+        if track_num == 0 and track_pos == 0:
+            # Log available fields to help debug
+            available_fields = [k for k in raw_data.keys() if 'track' in k.lower() or 'position' in k.lower() or 'number' in k.lower()]
+            logger.warning(f"TRACK_NUMBER_DEBUG: No track position found for {track_id_str}. Available fields: {available_fields}")
+        else:
+            logger.debug(f"TRACK_NUMBER_DEBUG: Track {track_id_str} has track_number={track_num}, track_position={track_pos}")
 
 
         # --- Filesizes ---

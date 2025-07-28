@@ -16,7 +16,7 @@ UI_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '
 
 def get_icon(icon_name: str) -> QIcon | None:
     """
-    Loads a QIcon from the assets/icons directory.
+    Loads a QIcon from the assets directory.
 
     Args:
         icon_name (str): The filename of the icon (e.g., "download.png").
@@ -24,21 +24,20 @@ def get_icon(icon_name: str) -> QIcon | None:
     Returns:
         QIcon | None: The loaded QIcon, or None if not found or an error occurs.
     """
-    # Construct a path assuming icon_utils.py is in src/utils 
-    # and icons are in src/ui/assets/
-    # Path from src/utils/icon_utils.py to src/ui/assets/
-    # .. (to src) / ui / assets / icon_name
-    
-    # Simplified path for now: Assumes an 'icons' subfolder within UI_ASSETS_DIR
-    # If your icons (like 'download.png') are directly in 'assets', adjust this.
-    # The previous AlbumDetailPage usage suggests 'download.png' might be directly in 'assets' folder
-    # next to 'back button.png'. Let's try that path construction.
+    if not icon_name:
+        logger.warning("get_icon called with empty icon_name")
+        return None
     
     # Path from src/utils/icon_utils.py to src/ui/assets/icon_name
     icon_path = os.path.join(UI_ASSETS_DIR, icon_name)
     
     if os.path.exists(icon_path):
         try:
+            # Check file size to avoid loading empty files
+            if os.path.getsize(icon_path) == 0:
+                logger.warning(f"Icon file is empty: {icon_path}")
+                return None
+            
             icon = QIcon(icon_path)
             if not icon.isNull():
                 logger.debug(f"Successfully loaded icon: {icon_path}")
@@ -51,10 +50,6 @@ def get_icon(icon_name: str) -> QIcon | None:
             return None
     else:
         logger.warning(f"Icon file not found at expected path: {icon_path}. UI_ASSETS_DIR was: {UI_ASSETS_DIR}")
-        # Attempt a fallback: what if assets folder is next to utils? (src/assets)
-        # This is less likely given typical structure.
-        # FallbackPath: os.path.join(os.path.dirname(UI_ASSETS_DIR), '..', 'assets', icon_name)
-        # For now, we stick to the most likely path used by other parts of the UI.
         return None
 
 if __name__ == '__main__':

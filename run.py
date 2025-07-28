@@ -103,6 +103,18 @@ def test_single_download(track_id_to_test: int, app_instance):
 
 
 def main():
+    # PERFORMANCE OPTIMIZATION: Apply startup optimizations for standalone executable
+    perf_monitor = None
+    try:
+        from src.utils.startup_optimizer import apply_startup_optimizations, create_performance_monitor
+        optimizer = apply_startup_optimizations()
+        perf_monitor = create_performance_monitor()
+        if perf_monitor:
+            perf_monitor.checkpoint("Startup optimizations applied")
+    except Exception as e:
+        # Don't let optimization failures break the app
+        print(f"Startup optimization warning: {e}")
+
     # Option 1: Setup your AppLogging if it configures the root logger
     # AppLogging.setup(level=logging.DEBUG) # Or however your AppLogging is initialized
 
@@ -113,6 +125,9 @@ def main():
                             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     logger.info("--- APPLICATION STARTING ---")
+    
+    if perf_monitor:
+        perf_monitor.checkpoint("Logging initialized")
 
     # Clean the image cache during startup (in a non-blocking way)
     try:
@@ -126,6 +141,15 @@ def main():
         logger.error(f"Error starting image cache cleanup: {e}")
 
     app = QApplication(sys.argv)
+    
+    # PERFORMANCE OPTIMIZATION: Apply UI-specific optimizations
+    try:
+        from src.utils.startup_optimizer import optimize_ui_startup
+        optimize_ui_startup(app)
+        if perf_monitor:
+            perf_monitor.checkpoint("UI optimizations applied")
+    except Exception as e:
+        logger.warning(f"UI optimization warning: {e}")
 
     # Set up qasync event loop
     event_loop = qasync.QEventLoop(app)
@@ -176,6 +200,11 @@ def main():
     # The app.quit() is now called from handle_finished or handle_error
     # If the download never starts or signals never fire, QTimer can be a fallback.
     # QTimer.singleShot(60000, lambda: (logger.warning("TEST: Timeout reached, quitting."), app.quit()))
+
+    # PERFORMANCE MONITORING: Final checkpoint before main loop
+    if perf_monitor:
+        perf_monitor.checkpoint("Application ready - entering main loop")
+        perf_monitor.summary()
 
     # app.exec() will run the qasync event loop
     with event_loop:
