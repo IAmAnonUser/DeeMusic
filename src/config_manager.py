@@ -82,7 +82,7 @@ class ConfigManager:
             },
             'downloads': {
                 'path': 'downloads',
-                'concurrent_downloads': 3,
+                'concurrent_downloads': 5,  # Increased from 3 to 5 for better performance
                 'quality': 'MP3_320',
                 'saveArtwork': True,
                 'embedArtwork': True,
@@ -113,6 +113,21 @@ class ConfigManager:
                         'artist': '%artist%',
                         'album': '%album%',
                         'cd': 'CD %disc_number%'
+                    }
+                },
+                'character_replacement': {
+                    'enabled': True,
+                    'replacement_char': '_',
+                    'custom_replacements': {
+                        '<': '_',
+                        '>': '_',
+                        ':': '_',
+                        '"': '_',
+                        '/': '_',
+                        '\\': '_',
+                        '|': '_',
+                        '?': '_',
+                        '*': '_'
                     }
                 }
             },
@@ -305,6 +320,13 @@ class ConfigManager:
             value: Value to set
         """
         keys = path.split('.')
+        
+        # SAFETY: Cap concurrent downloads at 5 for system stability
+        if path == 'downloads.concurrent_downloads' and isinstance(value, (int, float)):
+            if value > 5:
+                logger.warning(f"Capping concurrent downloads from {value} to 5 for system stability")
+                value = 5
+        
         logger.info(f"Setting {path} = {value}")
         
         # Update the config
