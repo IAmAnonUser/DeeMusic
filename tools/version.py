@@ -3,14 +3,14 @@ DeeMusic Version Information
 Centralized version management for the application.
 """
 
-__version__ = "1.0.8"
+__version__ = "1.0.9"
 __app_name__ = "DeeMusic"
 __description__ = "Modern music streaming and downloading application"
 
 # Version components for build tools
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
-VERSION_PATCH = 8
+VERSION_PATCH = 9
 VERSION_BUILD = 0
 
 # Formatted version strings

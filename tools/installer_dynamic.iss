@@ -2,7 +2,7 @@
 ; Inno Setup Script for creating a professional Windows installer
 
 #define MyAppName "DeeMusic"
-#define MyAppVersion "1.0.7"
+#define MyAppVersion "1.0.9"
 #define MyAppPublisher "DeeMusic Team"
 #define MyAppURL "https://github.com/IAmAnonUser/DeeMusic"
 #define MyAppExeName "DeeMusic.exe"

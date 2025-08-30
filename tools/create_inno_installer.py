@@ -53,14 +53,27 @@ def create_installer():
     version = get_version()
     print(f"🏷️  Version: {version}")
     
-    # Check if DeeMusic.exe exists
-    exe_path = Path("../dist/DeeMusic.exe")
+    # Check if DeeMusic.exe exists and verify it's standalone
+    exe_path = Path("dist/DeeMusic.exe")
     if not exe_path.exists():
-        print("❌ DeeMusic.exe not found in dist folder!")
-        print("   Run 'python tools/build_optimized.py' first.")
+        print("❌ DeeMusic.exe not found in tools/dist folder!")
+        print("   Run 'python tools/build_standalone.py' first for zero-dependency deployment.")
         return False
     
-    print(f"✅ DeeMusic.exe found ({exe_path.stat().st_size / (1024*1024):.1f} MB)")
+    # Verify executable is standalone (should be 80-120MB with embedded Python)
+    size_mb = exe_path.stat().st_size / (1024*1024)
+    print(f"✅ DeeMusic.exe found ({size_mb:.1f} MB)")
+    
+    if size_mb < 50:
+        print("⚠️  WARNING: Executable is too small to be standalone!")
+        print("   Standalone builds should be 80-120MB with embedded Python runtime.")
+        print("   Please use 'python tools/build_standalone.py' for zero-dependency deployment.")
+        print("   Current build may require Python installation on target computers.")
+    elif size_mb > 200:
+        print("⚠️  WARNING: Executable is unusually large!")
+        print("   This may indicate build issues or unnecessary dependencies.")
+    else:
+        print("✅ Executable size indicates standalone build with embedded dependencies")
     
     # Create dynamic installer script
     if not create_dynamic_installer_script():

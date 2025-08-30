@@ -126,13 +126,37 @@ Key Features:
 
 ## Building
 
-Want to build your own executable?
+### Quick Build (Recommended)
+Navigate to the `tools/` folder and use the batch files:
 
-```bash
-python tools/build.py
+```cmd
+cd tools
+
+# Build standalone executable only
+BuildTool.bat
+
+# Create Windows installer (builds executable first if needed)
+CreateInstaller.bat
+
+# Build everything (executable + installer) - RECOMMENDED
+BuildAndPackage.bat
+
+# Test environment first (if you have issues)
+TestBuild.bat
 ```
 
-This creates `dist/DeeMusic.exe` with all dependencies included.
+### Manual Build
+If you prefer manual control:
+
+```bash
+cd tools
+python build_standalone.py        # Build standalone executable
+python create_inno_installer.py   # Create installer (requires Inno Setup)
+```
+
+All builds create completely standalone executables with zero dependencies required on target computers.
+
+See `tools/HOW_TO_BUILD.md` for detailed instructions.
 
 ## System Requirements
 
