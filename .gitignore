@@ -68,12 +68,15 @@ development_rules.xml
 # Kiro AI assistant configuration (exclude from repository)
 .kiro/
 
-# Documentation folder (exclude from repository)
+# Documentation folder (exclude from repository, but allow essential build docs)
 docs/
+!docs/AI_PROJECT_GUIDE.md
 
-# Standalone markdown files (exclude from repository, keep README.md)
+# Standalone markdown files (exclude from repository, keep README.md and build docs)
 *.md
 !README.md
+!tools/HOW_TO_BUILD.md
+!tools/DEPLOYMENT_SUMMARY.md
 
 # Installer files
 installer_simple/
@@ -81,8 +84,7 @@ installer_output/
 *.zip
 DeeMusic_Setup_*.exe
 DeeMusic_Installer_*.zip
-BuildTools.bat
-BuildTool.bat
+# Old build tools (new ones in tools/ folder are tracked)
 
 # OS generated files
 .DS_Store
