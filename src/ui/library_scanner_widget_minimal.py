@@ -112,7 +112,7 @@ class ScanWorker(QThread):
         self.scan_type = scan_type  # "full" or "incremental"
         self.previous_mtimes = previous_mtimes or {}
         self.should_cancel = False
-        self.music_extensions = {'.mp3', '.flac', '.wav', '.m4a', '.aac', '.ogg', '.wma'}
+        self.music_extensions = {'.mp3', '.aac', '.ogg', '.wma', '.opus', '.ra', '.mp2', '.flac', '.alac', '.ape', '.wv', '.tta', '.mlp', '.wav', '.aiff', '.pcm', '.bwf', '.m4a'}
         
     def cancel(self):
         """Cancel the scanning process."""

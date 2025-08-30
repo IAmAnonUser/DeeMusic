@@ -56,7 +56,7 @@ class Config:
             "library_paths": [],
             "deezer_arl": "",
             "deemusic_path": "",
-            "supported_formats": [".mp3", ".flac", ".m4a", ".wav", ".ogg", ".wma"],
+            "supported_formats": [".mp3", ".aac", ".ogg", ".wma", ".opus", ".ra", ".mp2", ".flac", ".alac", ".ape", ".wv", ".tta", ".mlp", ".wav", ".aiff", ".pcm", ".bwf", ".m4a"],
             "album_match_threshold": 70,  # Lower threshold for album matching (more lenient)
             "track_match_threshold": 80,  # Higher threshold for track matching (more strict)
         }
@@ -116,7 +116,7 @@ class Config:
             library_scanner['library_paths'] = self.config.get('library_paths', [])
             library_scanner['album_match_threshold'] = self.config.get('album_match_threshold', 75)
             library_scanner['track_match_threshold'] = self.config.get('track_match_threshold', 80)
-            library_scanner['supported_formats'] = self.config.get('supported_formats', [".mp3", ".flac", ".m4a", ".wav", ".ogg", ".wma"])
+            library_scanner['supported_formats'] = self.config.get('supported_formats', [".mp3", ".aac", ".ogg", ".wma", ".opus", ".ra", ".mp2", ".flac", ".alac", ".ape", ".wv", ".tta", ".mlp", ".wav", ".aiff", ".pcm", ".bwf", ".m4a"])
             library_scanner['deemusic_path'] = self.config.get('deemusic_path', '')
             
             # Handle Deezer ARL - save to main deezer section
@@ -397,7 +397,7 @@ class Config:
     
     def get_supported_formats(self) -> list:
         """Get list of supported audio formats."""
-        return self.get("supported_formats", [".mp3", ".flac", ".m4a", ".wav", ".ogg", ".wma"])
+        return self.get("supported_formats", [".mp3", ".aac", ".ogg", ".wma", ".opus", ".ra", ".mp2", ".flac", ".alac", ".ape", ".wv", ".tta", ".mlp", ".wav", ".aiff", ".pcm", ".bwf", ".m4a"])
     
     def is_supported_format(self, file_path: str) -> bool:
         """Check if file format is supported."""
