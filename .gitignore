@@ -71,6 +71,10 @@ development_rules.xml
 # Documentation folder (exclude from repository)
 docs/
 
+# Standalone markdown files (exclude from repository, keep README.md)
+*.md
+!README.md
+
 # Installer files
 installer_simple/
 installer_output/
