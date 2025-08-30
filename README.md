@@ -15,25 +15,26 @@ A modern desktop application for downloading and managing music with an intuitiv
 - **Fast Downloads**: Multi-threaded downloading with progress tracking
 - **Cross-Session Continuity**: Previous scans and comparisons load automatically
 
-## What's New in v1.0.6
+## What's New in v1.0.8
 
-### Major Track Number Fix
-- **Fixed Critical Issue**: All album tracks now show correct sequential numbers (01, 02, 03, etc.) instead of all showing "01"
-- **Complete Solution**: Resolved API field mapping and download logic issues
-- **Better Organization**: Albums now have properly numbered tracks for clean library organization
+### Spotify Playlist Conversion Fixes
+- **Fixed Critical Bug**: Resolved "item_data is not defined" error that was preventing Spotify playlist conversions
+- **Enhanced UI**: Professional styling for playlist conversion results with sortable headers and match quality indicators
+- **Improved Reliability**: Better error handling and logging for playlist conversion process
 
-### Enhanced Queue Management
-- **Simplified UI**: Streamlined download queue interface with essential controls only
-- **Smart Detection**: Improved album completion detection prevents phantom downloads
-- **Better UI Sync**: Queue state properly synchronized between UI and storage
+### Automated Installation Experience
+- **Zero-Prompt Installer**: Completely automated installation process with no user interaction required
+- **Auto-Launch**: Installer automatically starts DeeMusic after installation completes
+- **Fixed Desktop Icons**: Desktop shortcuts now display proper application icons instead of blank icons
 
 ### Technical Improvements
-- **API Processing**: Enhanced Deezer API integration with correct field mappings
-- **Type Safety**: Added proper integer conversion for numeric fields
-- **Error Handling**: Better exception handling and recovery for queue operations
-- **Debug Logging**: Enhanced logging for troubleshooting download issues
+- **Variable Reference Fix**: Corrected undefined variable references in search widget logging
+- **Icon Management**: Updated installer to use embedded executable icons for better reliability
+- **Code Quality**: Enhanced error handling and user feedback throughout the application
 
-See [CHANGELOG.md](docs/CHANGELOG.md) for complete release notes and [RELEASE_NOTES_v1.0.6.md](docs/RELEASE_NOTES_v1.0.6.md) for detailed information.
+### Repository Cleanup
+- **Streamlined Codebase**: Removed development files and documentation from public repository
+- **Clean Distribution**: Focused on essential files for end users
 
 ## Quick Start
 
