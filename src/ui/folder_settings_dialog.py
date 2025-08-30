@@ -22,7 +22,7 @@ class FolderSettingsDialog(QDialog):
         Initialize the folder settings dialog.
         
         Args:
-            settings: Current folder structure settings
+            settings: Current folder structure and character replacement settings
             parent: Parent widget
         """
         super().__init__(parent)
@@ -54,6 +54,8 @@ class FolderSettingsDialog(QDialog):
         self.cd_checkbox.setChecked(self.settings.get('create_cd_folders', True))
         self.playlist_structure_checkbox.setChecked(self.settings.get('create_playlist_structure', False))
         self.singles_structure_checkbox.setChecked(self.settings.get('create_singles_structure', True))
+        
+
 
         folder_layout.addWidget(self.playlist_checkbox)
         folder_layout.addWidget(self.artist_checkbox)
@@ -91,6 +93,63 @@ class FolderSettingsDialog(QDialog):
         
         template_group.setLayout(template_layout)
 
+        # Character Replacement Settings
+        char_group = QGroupBox("Character Replacement")
+        char_layout = QVBoxLayout()
+        
+        # Enable/disable character replacement
+        self.char_replacement_enabled = QCheckBox("Enable custom character replacement")
+        char_layout.addWidget(self.char_replacement_enabled)
+        
+        # Default replacement character
+        default_char_layout = QHBoxLayout()
+        default_char_layout.addWidget(QLabel("Default replacement character:"))
+        self.default_replacement_char = QLineEdit()
+        self.default_replacement_char.setMaxLength(1)
+        self.default_replacement_char.setFixedWidth(30)
+        default_char_layout.addWidget(self.default_replacement_char)
+        default_char_layout.addStretch()
+        char_layout.addLayout(default_char_layout)
+        
+        # Custom character replacements
+        custom_char_label = QLabel("Custom character replacements:")
+        char_layout.addWidget(custom_char_label)
+        
+        # Create a form for common illegal characters
+        self.char_replacements = {}
+        illegal_chars = ['<', '>', ':', '"', '/', '\\', '|', '?', '*']
+        
+        char_form_layout = QFormLayout()
+        for char in illegal_chars:
+            replacement_input = QLineEdit()
+            replacement_input.setMaxLength(3)  # Allow up to 3 characters for replacement
+            replacement_input.setFixedWidth(50)
+            self.char_replacements[char] = replacement_input
+            char_form_layout.addRow(f"Replace '{char}' with:", replacement_input)
+        
+        char_layout.addLayout(char_form_layout)
+        
+        # Add help text for character replacement
+        char_help_text = QLabel(
+            "Configure how illegal filename characters are replaced.\n"
+            "Leave empty to use the default replacement character.\n"
+            "Common illegal characters: < > : \" / \\ | ? *"
+        )
+        char_help_text.setStyleSheet("color: gray; font-size: 10px;")
+        char_layout.addWidget(char_help_text)
+        
+        char_group.setLayout(char_layout)
+        
+        # Load character replacement settings after widgets are created
+        char_settings = self.settings.get('character_replacement', {})
+        self.char_replacement_enabled.setChecked(char_settings.get('enabled', True))
+        self.default_replacement_char.setText(char_settings.get('replacement_char', '_'))
+        
+        # Load custom replacements
+        custom_replacements = char_settings.get('custom_replacements', {})
+        for char, input_widget in self.char_replacements.items():
+            input_widget.setText(custom_replacements.get(char, ''))
+
         # Preview section
         preview_group = QGroupBox("Preview")
         preview_layout = QVBoxLayout()
@@ -114,6 +173,7 @@ class FolderSettingsDialog(QDialog):
         # Add all components to main layout
         layout.addWidget(folder_group)
         layout.addWidget(template_group)
+        layout.addWidget(char_group)
         layout.addWidget(preview_group)
         layout.addLayout(button_layout)
         
@@ -179,6 +239,13 @@ class FolderSettingsDialog(QDialog):
 
     def save_settings(self):
         """Save the current settings and emit the settings_changed signal."""
+        # Collect custom character replacements
+        custom_replacements = {}
+        for char, input_widget in self.char_replacements.items():
+            replacement = input_widget.text().strip()
+            if replacement:  # Only add non-empty replacements
+                custom_replacements[char] = replacement
+        
         settings = {
             'create_playlist_folders': self.playlist_checkbox.isChecked(),
             'create_artist_folders': self.artist_checkbox.isChecked(),
@@ -191,6 +258,11 @@ class FolderSettingsDialog(QDialog):
                 'artist': self.artist_template.text(),
                 'album': self.album_template.text(),
                 'cd': self.cd_template.text()
+            },
+            'character_replacement': {
+                'enabled': self.char_replacement_enabled.isChecked(),
+                'replacement_char': self.default_replacement_char.text() or '_',
+                'custom_replacements': custom_replacements
             }
         }
         

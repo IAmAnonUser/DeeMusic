@@ -29,6 +29,7 @@ pycryptodomex==3.20.0
 cryptography==41.0.7
 fuzzywuzzy==0.18.0
 python-Levenshtein
+psutil>=5.9.0
 
 # Media Downloading
 yt-dlp

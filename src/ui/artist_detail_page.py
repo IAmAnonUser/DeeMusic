@@ -359,10 +359,30 @@ class ArtistDetailPage(QWidget):
             self.artist_name_label.setText(artist_data.get('name', 'Unknown Artist'))
             
             # Fetch and display the artist image
-            image_url = artist_data.get('picture_xl') or artist_data.get('picture_big') or artist_data.get('picture')
+            # Try different picture sizes, prioritizing higher quality
+            image_url = (artist_data.get('picture_xl') or 
+                        artist_data.get('picture_big') or 
+                        artist_data.get('picture_medium') or 
+                        artist_data.get('picture'))
+            
             if image_url:
-                self._load_artist_image(image_url)
+                logger.info(f"[ArtistDetail] Artist API returned image URL: {image_url}")
+                # Validate that this looks like an artist image URL, not an album cover
+                if self._is_likely_artist_image_url(image_url):
+                    logger.info(f"[ArtistDetail] ✅ Loading validated artist image")
+                    self._load_artist_image(image_url)
+                else:
+                    logger.warning(f"[ArtistDetail] ❌ Image URL appears to be an album cover, using placeholder")
+                    # Try to get a different image size that might be correct
+                    alternative_url = self._try_get_alternative_artist_image(artist_data)
+                    if alternative_url and self._is_likely_artist_image_url(alternative_url):
+                        logger.info(f"[ArtistDetail] ✅ Found alternative artist image: {alternative_url}")
+                        self._load_artist_image(alternative_url)
+                    else:
+                        logger.warning(f"[ArtistDetail] No valid artist image found, using placeholder")
+                        self._set_artist_image_placeholder()
             else:
+                logger.warning(f"[ArtistDetail] No artist image URL found in API response")
                 self._set_artist_image_placeholder()
             
             # Update fan count with nice formatting
@@ -380,10 +400,70 @@ class ArtistDetailPage(QWidget):
             logger.info(f"[ArtistDetail] Initial tab index: {current_tab_index}, tab name: '{self.tab_bar.tabText(current_tab_index)}'")
             await self._load_tab_content(current_tab_index)
             
+            # If Singles tab is already selected, explicitly load singles to avoid missed signal edge cases
+            try:
+                if self.tab_bar.tabText(current_tab_index) == "Singles":
+                    logger.info("[ArtistDetail] Singles tab already active after artist load; forcing load_singles()")
+                    await self.load_singles()
+                # REMOVED: Background prefetch that was incorrectly setting _tabs_loaded['singles'] = True
+                # This was causing the "already loaded, skipping reload" issue
+                else:
+                    logger.info("[ArtistDetail] Singles tab not active, will load when tab is selected")
+            except Exception as _e:
+                logger.debug(f"[ArtistDetail] Optional singles force-load skipped: {_e}")
+            
         except Exception as e:
             logger.error(f"[ArtistDetail] Exception loading artist {artist_id}: {e}", exc_info=True)
             self.artist_name_label.setText("Error loading artist")
             
+    def _is_likely_artist_image_url(self, url: str) -> bool:
+        """
+        Check if the URL is likely an artist image rather than an album cover.
+        
+        Args:
+            url: Image URL to validate
+            
+        Returns:
+            bool: True if likely an artist image, False if likely an album cover
+        """
+        if not url:
+            return False
+            
+        logger.info(f"[ArtistDetail] Validating image URL: {url}")
+            
+        # Deezer artist images typically have '/artist/' in the path
+        # Album covers typically have '/cover/' in the path
+        if '/artist/' in url.lower():
+            logger.info(f"[ArtistDetail] ✅ URL contains '/artist/', confirmed artist image")
+            return True
+        elif '/cover/' in url.lower():
+            logger.warning(f"[ArtistDetail] ❌ URL contains '/cover/', this is an album cover, not artist image")
+            return False
+        else:
+            # If we can't determine from path, check the hash pattern
+            # Artist images often have different hash patterns than album covers
+            logger.warning(f"[ArtistDetail] ⚠️ Cannot determine image type from URL path")
+            logger.warning(f"[ArtistDetail] This might be an album cover being returned as artist image")
+            logger.warning(f"[ArtistDetail] Using placeholder instead to avoid showing wrong image")
+            return False  # Be more conservative - use placeholder if uncertain
+
+    def _try_get_alternative_artist_image(self, artist_data: dict) -> Optional[str]:
+        """Try to get an alternative artist image URL."""
+        # Try all available sizes in different order
+        alternatives = [
+            artist_data.get('picture_medium'),
+            artist_data.get('picture_small'),
+            artist_data.get('picture'),
+            artist_data.get('picture_big'),
+        ]
+        
+        for alt_url in alternatives:
+            if alt_url and alt_url != artist_data.get('picture_xl'):
+                logger.debug(f"[ArtistDetail] Trying alternative URL: {alt_url}")
+                return alt_url
+        
+        return None
+
     def _set_artist_image_placeholder(self):
         # Check if the label still exists
         if self._safe_sip_is_deleted(self.artist_image_label):
@@ -744,14 +824,22 @@ class ArtistDetailPage(QWidget):
             
             # Process each album and create cards
             cards = []
+            skipped_non_dict = 0
+            card_errors = 0
             for album_data in albums_data:
                 if not isinstance(album_data, dict):
+                    skipped_non_dict += 1
                     logger.warning(f"[ArtistDetail] Skipping non-dict album item: {album_data}")
                     continue
                 
-                # Ensure required fields
-                if 'type' not in album_data:
+                # Ensure required fields (force album type for album-like tabs)
+                if tab_type in ("albums", "singles", "eps"):
                     album_data['type'] = 'album'
+                else:
+                    if 'type' not in album_data:
+                        album_data['type'] = 'album'
+                if tab_type == "singles" and 'record_type' not in album_data:
+                    album_data['record_type'] = 'single'
                 
                 # Add artist information since we're on an artist page
                 if self.current_artist_data and self.current_artist_data.get('name'):
@@ -786,11 +874,55 @@ class ArtistDetailPage(QWidget):
                     
                     cards.append(card)
                 except Exception as card_error:
+                    card_errors += 1
                     logger.error(f"[ArtistDetail] Error creating card: {card_error}", exc_info=True)
             
-            # Set all cards to the responsive grid
-            responsive_grid.set_cards(cards)
-            scroll_area.setWidget(responsive_grid)
+            # If no cards could be created but we have data, render a simple list as a visible fallback
+            if len(cards) == 0 and albums_data:
+                logger.warning(f"[ArtistDetail] No cards created for {tab_type} (skipped_non_dict={skipped_non_dict}, card_errors={card_errors}). Rendering simple list fallback.")
+                try:
+                    from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+                    fallback = QWidget()
+                    v = QVBoxLayout(fallback)
+                    v.setContentsMargins(12, 12, 12, 12)
+                    v.setSpacing(8)
+                    max_items = min(50, len(albums_data))
+                    for i in range(max_items):
+                        item = albums_data[i]
+                        title = item.get('title', 'Untitled') if isinstance(item, dict) else str(item)
+                        lbl = QLabel(title)
+                        v.addWidget(lbl)
+                    scroll_area.setWidget(fallback)
+                except Exception as fb_err:
+                    logger.error(f"[ArtistDetail] Error rendering fallback list for {tab_type}: {fb_err}", exc_info=True)
+            else:
+                # Set all cards to the responsive grid
+                responsive_grid.set_cards(cards)
+                try:
+                    old_widget = None
+                    if hasattr(scroll_area, 'takeWidget'):
+                        try:
+                            old_widget = scroll_area.takeWidget()
+                        except Exception:
+                            old_widget = None
+                    scroll_area.setWidget(responsive_grid)
+                    if old_widget and old_widget is not responsive_grid:
+                        try:
+                            old_widget.deleteLater()
+                        except Exception:
+                            pass
+                    logger.debug(f"[ArtistDetail] Set new grid widget for tab '{tab_type}', grid_cards={len(cards)}")
+                except Exception as set_err:
+                    logger.error(f"[ArtistDetail] Error setting grid widget for {tab_type}: {set_err}", exc_info=True)
+            try:
+                # Ensure proper sizing and repaint
+                if hasattr(scroll_area, 'setWidgetResizable'):
+                    scroll_area.setWidgetResizable(True)
+                responsive_grid.updateGeometry()
+                if hasattr(scroll_area, 'viewport'):
+                    scroll_area.viewport().update()
+            except Exception as repaint_err:
+                logger.debug(f"[ArtistDetail] Minor repaint error ignored: {repaint_err}")
             logger.info(f"[ArtistDetail] Updated {tab_type} grid with {len(cards)} sorted items")
             
         except Exception as e:
@@ -920,33 +1052,25 @@ class ArtistDetailPage(QWidget):
         try:
             # Try multiple times with increasing timeouts
             all_artist_releases = None
-            for attempt in range(3):  # Try up to 3 times
+            for attempt in range(2):  # Try up to 2 times
                 try:
-                    timeout_duration = 10 + (attempt * 5)  # 10s, 15s, 20s
-                    logger.info(f"[ArtistDetail.load_albums] Attempt {attempt + 1}/3 with {timeout_duration}s timeout")
-                    
+                    timeout_duration = 20  # generous single timeout as we paginate internally
+                    logger.info(f"[ArtistDetail.load_albums] Attempt {attempt + 1}/2 with {timeout_duration}s timeout (paginated)")
                     all_artist_releases = await asyncio.wait_for(
-                        self.deezer_api.get_artist_albums_generic(self.current_artist_id, limit=100),
+                        self.deezer_api.get_artist_albums_all(self.current_artist_id, page_size=100, max_pages=10),
                         timeout=timeout_duration
                     )
-                    break  # Success, exit retry loop
-                    
+                    break
                 except asyncio.TimeoutError:
                     logger.warning(f"[ArtistDetail.load_albums] Attempt {attempt + 1} timed out")
-                    if attempt == 2:  # Last attempt
-                        logger.error(f"[ArtistDetail.load_albums] All attempts failed for artist {self.current_artist_id}")
+                    if attempt == 1:
                         error_label = QLabel("Loading timed out. Try again later.\nClick on this tab again to retry.")
                         error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                         error_label.setStyleSheet("color: #ff6b6b; padding: 20px;")
                         scroll_area.setWidget(error_label)
                         return
-                    else:
-                        # Show retry message
-                        retry_label = QLabel(f"Timeout on attempt {attempt + 1}. Retrying...")
-                        retry_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                        scroll_area.setWidget(retry_label)
-                        await asyncio.sleep(1)  # Brief pause before retry
-                        
+                    await asyncio.sleep(1)
+            
             if not all_artist_releases:
                 logger.info(f"[ArtistDetail.load_albums] No releases found for artist {self.current_artist_id}")
                 no_albums_label = QLabel("No albums found for this artist.")
@@ -1046,58 +1170,163 @@ class ArtistDetailPage(QWidget):
             logger.warning(f"[ArtistDetail.load_singles] No artist ID or API available.")
             return
 
-        # Get the scroll area like Featured In does
-        if hasattr(self, 'singles_page') and self.singles_page:
-            scroll_area = self.singles_page.findChild(QScrollArea)
-            if self._safe_sip_is_deleted(scroll_area):
-                logger.error("[ArtistDetail] QScrollArea not found in singles_page.")
-                return
-        else:
-            logger.error("[ArtistDetail] singles_page not found.")
+        # Get the current artist name for fallback searches
+        current_artist_name = (self.current_artist_data or {}).get('name', '') if hasattr(self, 'current_artist_data') else ''
+        
+        # Get the scroll area robustly
+        scroll_area = getattr(self, 'singles_scroll_area', None)
+        logger.debug(f"[ArtistDetail.load_singles] singles_scroll_area attribute: {scroll_area is not None}")
+        
+        if self._safe_sip_is_deleted(scroll_area):
+            # Fallback to searching within the page if attribute missing
+            if hasattr(self, 'singles_page') and self.singles_page:
+                scroll_area = self.singles_page.findChild(QScrollArea)
+                logger.debug(f"[ArtistDetail.load_singles] Found scroll area via findChild: {scroll_area is not None}")
+        
+        if self._safe_sip_is_deleted(scroll_area):
+            logger.error("[ArtistDetail] QScrollArea not found or deleted in singles_page.")
             return
         
+        logger.debug(f"[ArtistDetail.load_singles] Using scroll area: {type(scroll_area).__name__}")
+        
+        # Show loading message
+        loading_label = QLabel("Loading singles...")
+        loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scroll_area.setWidget(loading_label)
+
+        # Sequence guard: ensure the latest invocation wins UI updates
         try:
-            # Get all artist releases with increased timeout tolerance
+            self._singles_load_seq = getattr(self, '_singles_load_seq', 0) + 1
+            current_seq = self._singles_load_seq
+        except Exception:
+            current_seq = 0
+
+        try:
+            # Optimized approach: Use faster, more targeted API calls with concurrent execution
+            logger.info(f"[ArtistDetail.load_singles] Fetching singles for artist {self.current_artist_id} (optimized)")
+            
+            import concurrent.futures
+            
+            async def fetch_primary_releases():
+                """Fetch primary releases with reduced timeout and pagination."""
+                try:
+                    return await asyncio.wait_for(
+                        self.deezer_api.get_artist_albums_generic(self.current_artist_id, limit=200),
+                        timeout=8  # Reduced from 30 seconds
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[ArtistDetail.load_singles] Primary API call timed out")
+                    return []
+                except Exception as e:
+                    logger.error(f"[ArtistDetail.load_singles] Primary API error: {e}")
+                    return []
+            
+            async def fetch_singles_specific():
+                """Fetch singles using specific singles endpoint if available."""
+                try:
+                    # Try to get singles directly from the singles endpoint
+                    session = await self.deezer_api._get_session()
+                    if session:
+                        url = f"{self.deezer_api.PUBLIC_API_BASE}/artist/{self.current_artist_id}/albums"
+                        params = {'limit': 100}
+                        async with session.get(url, params=params, timeout=5) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                return data.get('data', [])
+                    return []
+                except Exception as e:
+                    logger.debug(f"[ArtistDetail.load_singles] Singles-specific API failed: {e}")
+                    return []
+            
+            # Execute both API calls concurrently for better performance
+            primary_task = asyncio.create_task(fetch_primary_releases())
+            singles_task = asyncio.create_task(fetch_singles_specific())
+            
+            # Wait for both with a total timeout
             try:
-                logger.info(f"[ArtistDetail.load_singles] Fetching singles for artist {self.current_artist_id}")
-                all_artist_releases = await asyncio.wait_for(
-                    self.deezer_api.get_artist_albums_generic(self.current_artist_id, limit=100),
-                    timeout=10  # 10 second timeout
+                primary_releases, specific_releases = await asyncio.wait_for(
+                    asyncio.gather(primary_task, singles_task, return_exceptions=True),
+                    timeout=12  # Total timeout for both calls
                 )
-                logger.debug(f"[ArtistDetail.load_singles] Raw API response: {all_artist_releases[:2] if all_artist_releases else 'None'}")
-                
-                # Filter just the singles
-                # Be more strict to avoid including EPs
-                singles_data = []
-                for item in all_artist_releases:
-                    record_type = item.get('record_type', '').lower()
+            except asyncio.TimeoutError:
+                logger.warning("[ArtistDetail.load_singles] Both API calls timed out")
+                primary_releases, specific_releases = [], []
+            
+            # Handle exceptions from gather
+            if isinstance(primary_releases, Exception):
+                logger.error(f"Primary releases failed: {primary_releases}")
+                primary_releases = []
+            if isinstance(specific_releases, Exception):
+                logger.debug(f"Specific releases failed: {specific_releases}")
+                specific_releases = []
+            
+            # Combine and deduplicate results
+            all_releases = []
+            seen_ids = set()
+            
+            for release_list in [primary_releases, specific_releases]:
+                if isinstance(release_list, list):
+                    for item in release_list:
+                        if isinstance(item, dict) and item.get('id') not in seen_ids:
+                            all_releases.append(item)
+                            seen_ids.add(item.get('id'))
+            
+            # Filter for singles with optimized detection
+            singles_data = []
+            if all_releases:
+                for item in all_releases:
+                    record_type = (item.get('record_type') or '').lower()
                     nb_tracks = item.get('nb_tracks', 0)
+                    title = (item.get('title') or '').lower()
                     
-                    # Only consider it a single if:
-                    # 1. record_type is 'single' AND has 3 or fewer tracks
-                    # This excludes EPs which typically have 4+ tracks but might be marked as 'single'
+                    # Optimized single detection (most common cases first)
+                    is_single = (
+                        record_type == 'single' or 
+                        nb_tracks in (1, 2) or
+                        '(feat' in title or 
+                        '(with' in title or
+                        'single' in title
+                    )
                     
-                    if record_type == 'single' and nb_tracks <= 3:
+                    if is_single:
                         singles_data.append(item)
-                
-                # Debug: Log what we filtered
-                logger.debug(f"[ArtistDetail.load_singles] Filtered {len(singles_data)} singles from {len(all_artist_releases)} total releases")
-                
-                # No fallback - if no singles found, just show "no singles" message
-                if not singles_data:
-                    logger.info(f"[ArtistDetail.load_singles] No singles found for artist {self.current_artist_id}.")
-                    no_singles_label = QLabel("No singles found for this artist.")
-                    no_singles_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    scroll_area.setWidget(no_singles_label)
-                    return
-                
+            
+            logger.info(f"[ArtistDetail.load_singles] Found {len(singles_data)} singles from {len(all_releases)} total releases (optimized)")
+            
+            # Only use expensive fallback if we have very few results
+            if len(singles_data) < 10:  # Reduced threshold from 50 to 10
+                logger.info("[ArtistDetail.load_singles] Very few singles found, trying comprehensive fallback")
+                try:
+                    # Use a much shorter timeout for the expensive call
+                    agg_releases = await asyncio.wait_for(
+                        self.deezer_api.get_artist_albums_all(self.current_artist_id, page_size=50, max_pages=5),
+                        timeout=8  # Reduced from 15 seconds
+                    )
+                    if agg_releases:
+                        # Merge with existing singles, avoiding duplicates
+                        for agg_single in agg_releases:
+                            if agg_single.get('id') not in seen_ids:
+                                record_type = (agg_single.get('record_type') or '').lower()
+                                nb_tracks = agg_single.get('nb_tracks', 0)
+                                if record_type == 'single' or nb_tracks in (1, 2):
+                                    singles_data.append(agg_single)
+                                    seen_ids.add(agg_single.get('id'))
+                        logger.info(f"[ArtistDetail.load_singles] After fallback: {len(singles_data)} total singles")
+                except Exception as e:
+                    logger.warning(f"[ArtistDetail.load_singles] Fallback failed: {e}")
+            
+            # Debug: Log the singles data
+            if singles_data:
+                logger.debug(f"[ArtistDetail.load_singles] First few singles: {[s.get('title', 'Unknown') for s in singles_data[:5]]}")
+                logger.debug(f"[ArtistDetail.load_singles] Record types: {[s.get('record_type', 'unknown') for s in singles_data[:5]]}")
+                logger.debug(f"[ArtistDetail.load_singles] Track counts: {[s.get('nb_tracks', 0) for s in singles_data[:5]]}")
+            
+            # If we have singles data, process it immediately
+            if singles_data:
                 logger.info(f"[ArtistDetail.load_singles] Found {len(singles_data)} singles for artist {self.current_artist_id}")
                 
                 # Cache the data for sorting
                 self._singles_data_cache = singles_data.copy()
-                
-                # Use responsive grid for singles
-                responsive_grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
                 
                 # Process each single and create cards
                 cards = []
@@ -1142,16 +1371,90 @@ class ArtistDetailPage(QWidget):
                     except Exception as card_error:
                         logger.error(f"[ArtistDetail.load_singles] Error creating card: {card_error}", exc_info=True)
                 
-                # Set all cards to the responsive grid
-                responsive_grid.set_cards(cards)
-                scroll_area.setWidget(responsive_grid)
-                logger.info(f"[ArtistDetail] Displayed {len(singles_data)} singles in grid layout.")
-            except asyncio.TimeoutError:
-                logger.error(f"[ArtistDetail.load_singles] Timeout fetching singles for artist {self.current_artist_id}")
-                error_label = QLabel("Loading timed out. Try again later.")
-                error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                scroll_area.setWidget(error_label)
+                # Update UI immediately with the data we have
+                logger.debug(f"[ArtistDetail.load_singles] About to update UI with {len(cards)} cards")
+                
+                def _apply_singles_ui():
+                    try:
+                        logger.debug(f"[ArtistDetail.load_singles] _apply_singles_ui called with {len(cards)} cards")
+                        grid = ResponsiveGridWidget(card_min_width=160, card_spacing=15)
+                        grid.set_cards(cards)
+                        scroll_area.setWidget(grid)
+                        if hasattr(scroll_area, 'setWidgetResizable'):
+                            scroll_area.setWidgetResizable(True)
+                        if hasattr(scroll_area, 'viewport'):
+                            scroll_area.viewport().update()
+                        logger.info(f"[ArtistDetail] Displayed {len(singles_data)} singles in grid layout.")
+                    except Exception as ui_err:
+                        logger.error(f"[ArtistDetail.load_singles] Error applying singles UI: {ui_err}", exc_info=True)
+                
+                QTimer.singleShot(0, _apply_singles_ui)
                 return
+            
+            # No fallback - if no singles found, just show "no singles" message
+            if not singles_data:
+                # Ensure we have the artist name for fallback searches
+                if not current_artist_name and self.current_artist_data:
+                    current_artist_name = self.current_artist_data.get('name', '')
+                
+                # Fallback: search tracks by artist name and synthesize single entries from their albums
+                logger.info(f"[ArtistDetail.load_singles] No singles by album API; falling back to track search for {current_artist_name}")
+                try:
+                    # Track-based fallback
+                    tracks = await self.deezer_api.search_tracks_by_artist_name(current_artist_name, limit=50)
+                    if tracks:
+                        seen_albums = set()
+                        for t in tracks:
+                            album = t.get('album') or {}
+                            album_id = album.get('id')
+                            if not album_id or album_id in seen_albums:
+                                continue
+                            seen_albums.add(album_id)
+                            singles_data.append({
+                                'id': album_id,
+                                'type': 'album',
+                                'record_type': 'single',
+                                'title': album.get('title', t.get('title', 'Single')),
+                                'artist': {'id': self.current_artist_id, 'name': current_artist_name},
+                                'cover_xl': album.get('cover_xl') or album.get('cover_big') or album.get('cover'),
+                                'nb_tracks': 1
+                            })
+
+                    # Album search fallback
+                    albums_search = await self.deezer_api.search_albums_by_artist_name(current_artist_name, limit=100)
+                    if albums_search:
+                        seen = {s.get('id') for s in singles_data}
+                        for a in albums_search:
+                            aid = a.get('id')
+                            if not aid or aid in seen:
+                                continue
+                            title = a.get('title', '')
+                            if '(feat' in title.lower() or '(with' in title.lower():
+                                singles_data.append({
+                                    'id': aid,
+                                    'type': 'album',
+                                    'record_type': 'single',
+                                    'title': title,
+                                    'artist': {'id': self.current_artist_id, 'name': current_artist_name},
+                                    'cover_xl': a.get('cover_xl') or a.get('cover_big') or a.get('cover'),
+                                    'nb_tracks': a.get('nb_tracks', 1)
+                                })
+                                seen.add(aid)
+                except Exception as e:
+                    logger.warning(f"[ArtistDetail.load_singles] Fallback track/album search failed: {e}")
+                if not singles_data:
+                    latest_seq = getattr(self, '_singles_load_seq', current_seq)
+                    current_tab_is_singles = (self.tab_bar.tabText(self.tab_bar.currentIndex()) == "Singles") if hasattr(self, 'tab_bar') else True
+                    if current_seq != latest_seq and not current_tab_is_singles:
+                        logger.debug("[ArtistDetail.load_singles] Stale singles load and tab not active, skipping empty-state UI update")
+                        return
+                    logger.info(f"[ArtistDetail.load_singles] No singles found for artist {self.current_artist_id}.")
+                    no_singles_label = QLabel("No singles found for this artist.")
+                    no_singles_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                    QTimer.singleShot(0, lambda: scroll_area.setWidget(no_singles_label))
+                    return
+                
+
             
         except Exception as e:
             logger.error(f"[ArtistDetail.load_singles] Exception in load_singles for artist {self.current_artist_id}: {e}", exc_info=True)
@@ -1442,32 +1745,54 @@ class ArtistDetailPage(QWidget):
             tab_cache_key = 'featured_in'
         
         # If content is already loaded, skip reloading
+        # BUT: For Singles tab, also check if the UI is actually showing content (not stuck on loading)
         if tab_cache_key and self._tabs_loaded.get(tab_cache_key, False):
-            logger.info(f"[ArtistDetail] Tab '{tab_name}' content already loaded, skipping reload")
-            return
+            # Special handling for Singles tab - check if it's actually showing content
+            if tab_name == "Singles":
+                scroll_area = getattr(self, 'singles_scroll_area', None)
+                if scroll_area and not self._safe_sip_is_deleted(scroll_area):
+                    current_widget = scroll_area.widget()
+                    if current_widget and hasattr(current_widget, 'text') and 'Loading' in current_widget.text():
+                        logger.info(f"[ArtistDetail] Singles tab marked as loaded but still showing loading message, forcing reload")
+                        self._tabs_loaded['singles'] = False
+                    else:
+                        logger.info(f"[ArtistDetail] Tab '{tab_name}' content already loaded, skipping reload")
+                        return
+                else:
+                    logger.info(f"[ArtistDetail] Tab '{tab_name}' content already loaded, skipping reload")
+                    return
+            else:
+                logger.info(f"[ArtistDetail] Tab '{tab_name}' content already loaded, skipping reload")
+                return
 
-        if tab_name == "Top tracks":
-            logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_top_tracks()")
-            await self.load_top_tracks()
-            self._tabs_loaded['top_tracks'] = True
-        elif tab_name == "Albums":
-            logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_albums()")
-            await self.load_albums()
-            self._tabs_loaded['albums'] = True
-        elif tab_name == "Singles":
-            logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_singles()")
-            await self.load_singles()
-            self._tabs_loaded['singles'] = True
-        elif tab_name == "EP's":
-            logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_eps()")
-            await self.load_eps()
-            self._tabs_loaded['eps'] = True
-        elif tab_name == "Featured In":
-            logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_featured_in()")
-            await self.load_featured_in()
-            self._tabs_loaded['featured_in'] = True
-        else:
-            logger.warning(f"[ArtistDetail] load_content_for_tab: Unknown tab name: {tab_name}")
+        try:
+            if tab_name == "Top tracks":
+                logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_top_tracks()")
+                await self.load_top_tracks()
+                self._tabs_loaded['top_tracks'] = True
+            elif tab_name == "Albums":
+                logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_albums()")
+                await self.load_albums()
+                self._tabs_loaded['albums'] = True
+            elif tab_name == "Singles":
+                logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_singles()")
+                await self.load_singles()
+                self._tabs_loaded['singles'] = True
+            elif tab_name == "EP's":
+                logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_eps()")
+                await self.load_eps()
+                self._tabs_loaded['eps'] = True
+            elif tab_name == "Featured In":
+                logger.info(f"[ArtistDetail] load_content_for_tab: Calling load_featured_in()")
+                await self.load_featured_in()
+                self._tabs_loaded['featured_in'] = True
+            else:
+                logger.warning(f"[ArtistDetail] load_content_for_tab: Unknown tab name: {tab_name}")
+        except Exception as e:
+            logger.error(f"[ArtistDetail] Error loading content for tab '{tab_name}': {e}")
+            # Reset the loaded flag if loading failed
+            if tab_cache_key:
+                self._tabs_loaded[tab_cache_key] = False
         # Ensure no old tab cases are left uncommented or improperly formatted
         pass # Ensure method ends cleanly
 
@@ -1893,23 +2218,35 @@ class ArtistDetailPage(QWidget):
         """Load content for the specified tab index."""
         logger.info(f"[ArtistDetail] Loading content for tab index: {tab_index}")
         
-        if tab_index == 0:  # Top Tracks
-            logger.info(f"[ArtistDetail] Calling load_top_tracks()")
-            await self.load_top_tracks()
-        elif tab_index == 1:  # Albums
-            logger.info(f"[ArtistDetail] Calling load_albums()")
-            await self.load_albums()
-        elif tab_index == 2:  # Singles
-            logger.info(f"[ArtistDetail] Calling load_singles()")
-            await self.load_singles()
-        elif tab_index == 3:  # EPs
-            logger.info(f"[ArtistDetail] Calling load_eps()")
-            await self.load_eps()
-        elif tab_index == 4:  # Featured In
-            logger.info(f"[ArtistDetail] Calling load_featured_in()")
-            await self.load_featured_in()
-        else:
-            logger.warning(f"[ArtistDetail] Unknown tab index: {tab_index}")
+        try:
+            if tab_index == 0:  # Top Tracks
+                logger.info(f"[ArtistDetail] Calling load_top_tracks()")
+                await self.load_top_tracks()
+                self._tabs_loaded['top_tracks'] = True
+            elif tab_index == 1:  # Albums
+                logger.info(f"[ArtistDetail] Calling load_albums()")
+                await self.load_albums()
+                self._tabs_loaded['albums'] = True
+            elif tab_index == 2:  # Singles
+                logger.info(f"[ArtistDetail] Calling load_singles()")
+                await self.load_singles()
+                self._tabs_loaded['singles'] = True
+            elif tab_index == 3:  # EPs
+                logger.info(f"[ArtistDetail] Calling load_eps()")
+                await self.load_eps()
+                self._tabs_loaded['eps'] = True
+            elif tab_index == 4:  # Featured In
+                logger.info(f"[ArtistDetail] Calling load_featured_in()")
+                await self.load_featured_in()
+                self._tabs_loaded['featured_in'] = True
+            else:
+                logger.warning(f"[ArtistDetail] Unknown tab index: {tab_index}")
+        except Exception as e:
+            logger.error(f"[ArtistDetail] Error loading content for tab index {tab_index}: {e}")
+            # Reset the loaded flag if loading failed
+            tab_keys = ['top_tracks', 'albums', 'singles', 'eps', 'featured_in']
+            if 0 <= tab_index < len(tab_keys):
+                self._tabs_loaded[tab_keys[tab_index]] = False
 
     def cleanup_cards(self):
         """Clean up any SearchResultCard instances to prevent memory leaks."""
@@ -2002,16 +2339,27 @@ class ArtistDetailPage(QWidget):
             # Filter just the singles
             # Be more strict to avoid including EPs
             singles_data = []
+            seen_single_ids = set()
+            current_artist_name = (self.current_artist_data or {}).get('name', '')
             for item in all_artist_releases:
                 record_type = item.get('record_type', '').lower()
                 nb_tracks = item.get('nb_tracks', 0)
-                
-                # Only consider it a single if:
-                # 1. record_type is 'single' AND has 3 or fewer tracks
-                # This excludes EPs which typically have 4+ tracks but might be marked as 'single'
-                
-                if record_type == 'single' and nb_tracks <= 3:
+                album_artist_name = (item.get('artist', {}) or {}).get('name', '')
+                item_id = item.get('id')
+
+                # Core single rule: include all 'single' record types regardless of nb_tracks
+                is_single_core = record_type == 'single'
+
+                # Heuristic: some singles are mis-typed; accept releases with 1-2 tracks
+                # where album artist matches the current artist
+                is_single_heur = (nb_tracks in (1, 2)) and (
+                    album_artist_name.lower() == current_artist_name.lower() if current_artist_name and album_artist_name else False
+                )
+
+                if (is_single_core or is_single_heur) and (item_id not in seen_single_ids):
                     singles_data.append(item)
+                    if item_id is not None:
+                        seen_single_ids.add(item_id)
             
             logger.info(f"[ArtistDetail] Found {len(singles_data)} singles to download")
             

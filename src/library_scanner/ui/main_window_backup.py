@@ -25,7 +25,7 @@ from PyQt6.QtGui import QIcon, QAction
 from core.library_scanner import LibraryScanner, TrackInfo
 from core.comparison_engine import ComparisonEngine
 from services.deezer_service import DeezerService
-from services.download_adapter import DownloadAdapter
+from services.download_manager import DownloadManager
 from ui.queue_import_dialog import QueueImportDialog
 from utils.queue_integration import QueueIntegration
 
@@ -387,8 +387,8 @@ class MainWindow(QMainWindow):
         self.scan_worker = None
         self.comparison_worker = None
         
-        # Services - Use adapter for compatibility with both old and new systems
-        self.download_manager = DownloadAdapter(config.get_deemusic_path(), config.config_dir)
+        # Services
+        self.download_manager = DownloadManager(config.get_deemusic_path(), config.config_dir)
         
         self.init_ui()
         self.load_settings()
@@ -1494,7 +1494,7 @@ Fast Album Comparison Results (Re-evaluated):
     def download_selected_items(self):
         """Download selected missing items."""
         if not hasattr(self, 'download_manager'):
-            self.download_manager = DownloadAdapter(self.config.get_deemusic_path())
+            self.download_manager = DownloadManager(self.config.get_deemusic_path())
         
         if self.download_manager.get_queue_size() == 0:
             QMessageBox.warning(self, "Empty Queue", "No items in download queue.")
@@ -2255,7 +2255,7 @@ Fast Album Comparison Results:
     def add_all_missing_to_queue(self):
         """Add all missing tracks to download queue."""
         if not hasattr(self, 'download_manager'):
-            self.download_manager = DownloadAdapter(self.config.get_deemusic_path())
+            self.download_manager = DownloadManager(self.config.get_deemusic_path())
         
         missing_tracks = self.comparison_results.get("missing_from_local", [])
         added_count = 0
@@ -2273,7 +2273,7 @@ Fast Album Comparison Results:
     def add_selected_to_queue(self):
         """Add selected missing tracks to download queue."""
         if not hasattr(self, 'download_manager'):
-            self.download_manager = DownloadAdapter(self.config.get_deemusic_path())
+            self.download_manager = DownloadManager(self.config.get_deemusic_path())
         
         selected_items = self.missing_tree.selectedItems()
         if not selected_items:

@@ -2,7 +2,7 @@
 ; Inno Setup Script for creating a professional Windows installer
 
 #define MyAppName "DeeMusic"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.0.7"
 #define MyAppPublisher "DeeMusic Team"
 #define MyAppURL "https://github.com/IAmAnonUser/DeeMusic"
 #define MyAppExeName "DeeMusic.exe"
@@ -49,11 +49,11 @@ Source: "src\ui\assets\logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "README.md"; DestDir: "{app}"; Flags: ignoreversion; DestName: "README.txt"
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\logo.ico"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:ProgramOnTheWeb,{#MyAppName}}"; Filename: "{#MyAppURL}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\logo.ico"; Tasks: desktopicon
-Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\logo.ico"; Tasks: quicklaunchicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{userappdata}\Microsoft\Internet Explorer\Quick Launch\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: quicklaunchicon
 
 [Registry]
 ; File associations (only if user selected the task)
@@ -61,7 +61,7 @@ Root: HKCU; Subkey: "Software\Classes\.mp3"; ValueType: string; ValueName: ""; V
 Root: HKCU; Subkey: "Software\Classes\.flac"; ValueType: string; ValueName: ""; ValueData: "DeeMusic.AudioFile"; Flags: uninsdeletevalue; Tasks: associatefiles
 Root: HKCU; Subkey: "Software\Classes\.m4a"; ValueType: string; ValueName: ""; ValueData: "DeeMusic.AudioFile"; Flags: uninsdeletevalue; Tasks: associatefiles
 Root: HKCU; Subkey: "Software\Classes\DeeMusic.AudioFile"; ValueType: string; ValueName: ""; ValueData: "DeeMusic Audio File"; Flags: uninsdeletekey; Tasks: associatefiles
-Root: HKCU; Subkey: "Software\Classes\DeeMusic.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\logo.ico"; Tasks: associatefiles
+Root: HKCU; Subkey: "Software\Classes\DeeMusic.AudioFile\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\{#MyAppExeName},0"; Tasks: associatefiles
 Root: HKCU; Subkey: "Software\Classes\DeeMusic.AudioFile\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#MyAppExeName}"" ""%1"""; Tasks: associatefiles
 
 [Run]

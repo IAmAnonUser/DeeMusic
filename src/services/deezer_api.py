@@ -7,6 +7,7 @@ import requests
 import aiohttp
 import asyncio
 import time
+import threading
 from typing import Dict, List, Optional, Any
 import deezer  # Import the deezer-python module correctly
 from pathlib import Path
@@ -50,16 +51,56 @@ class DeezerAPI:
         self.license_token: Optional[str] = None
         self.user_id = None
         self.user_info: Optional[Dict] = None
+        self.token_created_at = None  # Track when token was created
+        self.token_refresh_interval = 300  # Refresh every 5 minutes (more conservative for download stability)
+        # Simplified token management - no complex error tracking
         self.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         self._proxy_url: Optional[str] = None  # Store proxy URL for requests
+        self.sync_session = None  # Initialize persistent sync session
+        self._token_refresh_lock = threading.RLock()  # Thread-safe token refresh
+        self._session_lock = threading.RLock()  # Thread-safe session management
         
+        # CSRF retry tracking - initialize missing attributes
+        self.csrf_retry_count = 0
+        self.max_csrf_retries = 3
+        
+    def _should_refresh_tokens(self) -> bool:
+        """Check if tokens should be refreshed proactively."""
+        logger.info(f"[SHOULD_REFRESH] Checking if tokens should be refreshed. token_created_at: {self.token_created_at}")
+        if not self.token_created_at:
+            logger.info("[SHOULD_REFRESH] No token_created_at, returning True")
+            return True
+        
+        # More conservative refresh policy to prevent CSRF token conflicts during downloads
+        current_time = time.time()
+        age = current_time - self.token_created_at
+        
+        # Increase the base interval to 8 minutes to reduce conflicts during downloads
+        base_interval = 480  # 8 minutes
+        
+        # Add random jitter (±60 seconds) to prevent all requests from refreshing simultaneously
+        jitter = random.randint(-60, 60)
+        effective_interval = base_interval + jitter
+        
+        should_refresh = age > effective_interval
+        logger.info(f"[SHOULD_REFRESH] Token age: {age:.1f}s, effective interval: {effective_interval}s, should_refresh: {should_refresh}")
+        if should_refresh:
+            logger.debug(f"Token age: {age:.1f}s, effective interval: {effective_interval}s, refreshing")
+        
+        return should_refresh
+    
     async def _ensure_session_and_tokens(self) -> bool:
         """Ensure that a valid session and API tokens are available."""
         session = await self._get_session()
         if not session:
             logger.error("Failed to get session in _ensure_session_and_tokens.")
             return False
-        if not self.api_token or not self.csrf_token: # Or just self.user_id if that's a good proxy
+        
+        # Check if tokens need proactive refresh
+        if self._should_refresh_tokens():
+            logger.info("Tokens are old, proactively refreshing...")
+            await self._get_tokens()
+        elif not self.api_token or not self.csrf_token: # Or just self.user_id if that's a good proxy
             logger.debug("API token or CSRF token missing, attempting to fetch tokens.")
             if not await self._get_tokens():
                 logger.error("Failed to get tokens in _ensure_session_and_tokens.")
@@ -95,71 +136,55 @@ class DeezerAPI:
         """Get the existing session or create a new one on demand."""
         if self.session and not self.session.closed:
             return self.session
-            
+
         # Create session if it doesn't exist or is closed
         if not self.loop:
             logger.error("Cannot create session: DeezerAPI has no event loop instance.")
             return None
-            
+
         try:
-            # Use the stored self.loop explicitly
-            logger.debug(f"Creating new aiohttp ClientSession on stored loop {self.loop} (running={self.loop.is_running()})")
-            
-            # Get proxy configuration
-            proxy_config = self.config.get_setting('network.proxy', {})
-            session_kwargs = {
-                'loop': self.loop,  # Use stored loop
-                'headers': {
-                    'User-Agent': self.config.get_setting('network.user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'),
-                    'Accept': '*/*',
-                    'Accept-Language': 'en-US,en;q=0.9'
-                }
-            }
-            
-            # Add proxy configuration if enabled
-            if proxy_config.get('enabled', False) and proxy_config.get('use_for_api', True):
-                proxy_host = proxy_config.get('host', '')
-                proxy_port = proxy_config.get('port', '')
-                proxy_type = proxy_config.get('type', 'http')
-                proxy_username = proxy_config.get('username', '')
-                proxy_password = proxy_config.get('password', '')
-                
-                if proxy_host and proxy_port:
-                    # Build proxy URL
-                    if proxy_username and proxy_password:
-                        proxy_url = f"{proxy_type}://{proxy_username}:{proxy_password}@{proxy_host}:{proxy_port}"
-                    else:
-                        proxy_url = f"{proxy_type}://{proxy_host}:{proxy_port}"
-                    
-                    session_kwargs['connector'] = aiohttp.TCPConnector(
-                        limit=100,
-                        limit_per_host=30,
-                        ttl_dns_cache=300,
-                        use_dns_cache=True,
-                    )
-                    session_kwargs['trust_env'] = True  # Allow proxy environment variables
-                    
-                    logger.info(f"Using proxy for API requests: {proxy_type}://{proxy_host}:{proxy_port}")
-                    # Note: For aiohttp, proxy is set per request, not per session
-                    # We'll store the proxy URL for use in requests
-                    self._proxy_url = proxy_url
-                else:
-                    logger.warning("Proxy enabled but host/port not configured properly")
-            
-            self.session = aiohttp.ClientSession(**session_kwargs)
-            
+            # Create session with timeout and connector settings
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)
+            connector = aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=30,
+                ttl_dns_cache=300,
+                use_dns_cache=True,
+                keepalive_timeout=30,
+                enable_cleanup_closed=True
+            )
+
+            # Create session with additional error handling
+            try:
+                self.session = aiohttp.ClientSession(
+                    connector=connector,
+                    timeout=timeout,
+                    loop=self.loop,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1',
+                    }
+                )
+            except RuntimeError as e:
+                if "Event loop is closed" in str(e):
+                    logger.error(f"Cannot create session due to event loop issues: {e}")
+                    return None
+                raise
+
             # If ARL exists, set the cookie on the new session
             if self.arl:
                  await self._set_cookie() # _set_cookie assumes self.session exists now
-                 
+
             return self.session
-        except RuntimeError as e:
-             # Handle cases where loop isn't running when get_event_loop is called
-             logger.error(f"Failed to get running event loop for session creation: {e}")
-             return None
         except Exception as e:
             logger.error(f"Failed to create aiohttp ClientSession: {e}")
             self.session = None # Ensure session is None if creation fails
+            # Add a small delay to prevent rapid recreation attempts
+            await asyncio.sleep(0.1)
             return None
 
     async def _set_cookie(self) -> None:
@@ -167,6 +192,15 @@ class DeezerAPI:
         if not self.session or self.session.closed:
              logger.error("_set_cookie called but session is invalid!")
              return
+        
+        # Additional safety check
+        try:
+            if not hasattr(self.session, 'cookie_jar'):
+                logger.error("Session exists but has no cookie_jar - session may be corrupted")
+                return
+        except Exception as e:
+            logger.error(f"Error checking session state: {e}")
+            return
         if not self.arl:
              logger.warning("_set_cookie called but no ARL token is set.")
              return
@@ -174,6 +208,19 @@ class DeezerAPI:
         cookies = {'arl': self.arl}
         self.session.cookie_jar.update_cookies(cookies, URL('https://www.deezer.com'))
         logger.debug("ARL cookie set on session")
+        
+    async def ensure_session_ready(self) -> bool:
+        """Ensure the session is ready for API calls. Returns True if ready, False otherwise."""
+        try:
+            session = await self._get_session()
+            if session is not None and not session.closed:
+                # Make sure self.session is updated to the valid session
+                self.session = session
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error ensuring session ready: {e}")
+            return False
         
     async def _make_request(self, method: str, url: str, **kwargs):
         """Make HTTP request with proxy support if configured."""
@@ -216,6 +263,9 @@ class DeezerAPI:
                 
             if (data.get('error') and len(data['error']) > 0) or 'results' not in data:
                 logger.error(f"Invalid token response (error or missing results): {data}")
+                # Check if this is an ARL token issue
+                if data.get('error') and any('Invalid' in str(err) or 'expired' in str(err).lower() for err in data['error']):
+                    logger.error("ARL token appears to be invalid or expired. Please update your ARL token in settings.")
                 return False
                 
             result = data.get('results', {})
@@ -229,10 +279,18 @@ class DeezerAPI:
             # Get license token
             await self._get_license_token()
             
+            # Track when tokens were created and reset error count
+            current_time = time.time()
+            self.token_created_at = current_time
+            # Reset CSRF retry counter on successful token creation
+            self.csrf_retry_count = 0
+            # Token created successfully
+            
             return bool(self.api_token and self.csrf_token)
                 
         except Exception as e:
             logger.error(f"Error getting tokens: {e}")
+            # Token refresh failed
             return False
             
     async def _get_license_token(self) -> Optional[str]:
@@ -322,10 +380,11 @@ class DeezerAPI:
         self.arl = arl_token
         self.config.set_setting('deezer.arl', arl_token)
         
-        # Reset session
-        if self.session:
-            await self.session.close()
-            self.session = None
+        # Reset session with proper locking to prevent race conditions
+        async with self._session_lock:
+            if self.session:
+                await self.session.close()
+                self.session = None
         
         # Get tokens (will call _get_session)
         if not await self._get_tokens(): return False
@@ -552,11 +611,21 @@ class DeezerAPI:
             logger.error("Cannot get chart playlists: no session.")
             return None
 
+        # Additional session validation to prevent crashes
+        if session.closed:
+            logger.error("Session is closed, cannot fetch chart playlists")
+            return None
+
         request_url = f"{self.PUBLIC_API_BASE}/chart/0/playlists?limit={limit}"
         
         try:
             logger.info(f"Fetching chart playlists from: {request_url}")
-            async with session.get(request_url) as response:
+            # Get fresh session reference right before use to prevent race conditions
+            fresh_session = await self._get_session()
+            if not fresh_session or fresh_session.closed:
+                logger.error("Cannot get fresh session for chart playlists fetch")
+                return None
+            async with fresh_session.get(request_url) as response:
                 if response.status != 200:
                     logger.error(f"Failed to get chart playlists: HTTP {response.status} - {await response.text()}")
                     return None
@@ -607,13 +676,14 @@ class DeezerAPI:
         """
         session = await self._get_session()
         if not session:
-            logger.error("Cannot get chart artists: no session.")
+            logger.error("Cannot get chart artists: session not available")
             return None
 
         request_url = f"{self.PUBLIC_API_BASE}/chart/0/artists?limit={limit}"
         
         try:
             logger.info(f"Fetching chart artists from: {request_url}")
+            # Use the validated session directly
             async with session.get(request_url) as response:
                 if response.status != 200:
                     logger.error(f"Failed to get chart artists: HTTP {response.status} - {await response.text()}")
@@ -664,13 +734,14 @@ class DeezerAPI:
         """
         session = await self._get_session()
         if not session:
-            logger.error("Cannot get chart albums: no session.")
+            logger.error("Cannot get chart albums: session not available")
             return None
 
         request_url = f"{self.PUBLIC_API_BASE}/chart/0/albums?limit={limit}"
         
         try:
             logger.info(f"Fetching chart albums from: {request_url}")
+            # Use the validated session directly
             async with session.get(request_url) as response:
                 if response.status != 200:
                     logger.error(f"Failed to get chart albums: HTTP {response.status} - {await response.text()}")
@@ -723,56 +794,68 @@ class DeezerAPI:
         Returns:
             Optional[List[Dict]]: A list of new release album details, or None on error.
         """
-        session = await self._get_session()
-        if not session:
-            logger.error("Cannot get editorial releases: no session.")
-            return None
+        # Retry logic for session issues
+        for attempt in range(2):
+            session = await self._get_session()
+            if not session:
+                logger.error(f"Cannot get editorial releases: no session (attempt {attempt + 1})")
+                if attempt == 0:
+                    # Log the error but don't close session aggressively during downloads
+                    logger.warning(f"Session error during chart fetch, will retry: {e}")
+                    continue
+                return None
 
-        request_url = f"{self.PUBLIC_API_BASE}/editorial/0/releases?limit={limit}"
-        
-        try:
-            logger.info(f"Fetching editorial releases from: {request_url}")
-            async with session.get(request_url) as response:
-                if response.status != 200:
-                    logger.error(f"Failed to get editorial releases: HTTP {response.status} - {await response.text()}")
-                    return None
-                
-                data = await response.json()
-                if not data or 'data' not in data:
-                    logger.error(f"Invalid editorial releases response: 'data' field missing. Response: {data}")
-                    return None
-
-                releases_data = data.get('data', [])
-                
-                parsed_releases = []
-                for release_info in releases_data:
-                    # Ensure essential keys and nested artist object with name are present
-                    if not all(k in release_info for k in ['id', 'title', 'cover_medium', 'artist']) or \
-                       not isinstance(release_info.get('artist'), dict) or \
-                       'name' not in release_info.get('artist', {}):
-                        logger.warning(f"Skipping release due to missing keys or invalid artist structure: {release_info.get('title', 'N/A')}")
-                        continue
+            request_url = f"{self.PUBLIC_API_BASE}/editorial/0/releases?limit={limit}"
+            
+            try:
+                logger.info(f"Fetching editorial releases from: {request_url} (attempt {attempt + 1})")
+                async with session.get(request_url) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to get editorial releases: HTTP {response.status} - {await response.text()}")
+                        return None
                     
-                    parsed_releases.append({
-                        'id': release_info.get('id'),
-                        'title': release_info.get('title'),
-                        'artist_name': release_info['artist'].get('name'),
-                        'picture_url': release_info.get('cover_medium'), 
-                        'type': 'album'
-                    })
-                
-                logger.info(f"Successfully fetched and parsed {len(parsed_releases)} editorial releases.")
-                return parsed_releases
+                    data = await response.json()
+                    if not data or 'data' not in data:
+                        logger.error(f"Invalid editorial releases response: 'data' field missing. Response: {data}")
+                        return None
 
-        except aiohttp.ClientError as e:
-            logger.error(f"Network error fetching editorial releases: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error for editorial releases: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error fetching editorial releases: {e}")
-            return None
+                    releases_data = data.get('data', [])
+                    
+                    parsed_releases = []
+                    for release_info in releases_data:
+                        # Ensure essential keys and nested artist object with name are present
+                        if not all(k in release_info for k in ['id', 'title', 'cover_medium', 'artist']) or \
+                           not isinstance(release_info.get('artist'), dict) or \
+                           'name' not in release_info.get('artist', {}):
+                            logger.warning(f"Skipping release due to missing keys or invalid artist structure: {release_info.get('title', 'N/A')}")
+                            continue
+                        
+                        parsed_releases.append({
+                            'id': release_info.get('id'),
+                            'title': release_info.get('title'),
+                            'artist_name': release_info['artist'].get('name'),
+                            'picture_url': release_info.get('cover_medium'), 
+                            'type': 'album'
+                        })
+                    
+                    logger.info(f"Successfully fetched and parsed {len(parsed_releases)} editorial releases.")
+                    return parsed_releases
+
+            except aiohttp.ClientError as e:
+                logger.error(f"Network error fetching editorial releases (attempt {attempt + 1}): {e}")
+                if attempt == 0 and "Connector is closed" in str(e):
+                    # Log the error but don't close session aggressively during downloads
+                    logger.warning(f"Connector error during chart fetch, will retry: {e}")
+                    continue
+                return None
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON decode error for editorial releases: {e}")
+                return None
+            except Exception as e:
+                logger.error(f"Unexpected error fetching editorial releases: {e}")
+                return None
+        
+        return None
 
     async def _get_track_info(self, track_id: str) -> Optional[Dict]:
         """Get additional track information including tokens.
@@ -787,6 +870,15 @@ class DeezerAPI:
         if not session: return None
         if not self.api_token or not self.csrf_token:
              await self._get_tokens()
+        
+        # Preemptive token refresh check before making API call
+        if self._should_refresh_tokens():
+            logger.info("Tokens are old, preemptively refreshing before async pageTrack call...")
+            if await self._get_tokens():
+                logger.info("Preemptive async token refresh successful")
+            else:
+                logger.warning("Preemptive async token refresh failed, continuing with existing token")
+        
         try:
             params = {
                 'method': 'deezer.pageTrack',
@@ -804,9 +896,15 @@ class DeezerAPI:
                 logger.debug(f"Private API response for {track_id}: {data}")
                 if 'error' in data and data['error']:
                     if 'VALID_TOKEN_REQUIRED' in data['error']:
-                        logger.debug("Token invalid, refreshing tokens...")
+                        # Simple CSRF error handling like the working July 15th version
+                        logger.debug(f"CSRF token expired, refreshing tokens...")
+                        
                         if await self._get_tokens():
+                            logger.debug("Token refreshed successfully, retrying request")
                             return await self._get_track_info(track_id)
+                        else:
+                            logger.warning("Failed to refresh CSRF token")
+                            return None
                     logger.error(f"API error: {data['error']}")
                     return None
                 if 'results' not in data or not data['results']:
@@ -820,6 +918,9 @@ class DeezerAPI:
                     return None
                 if lyrics_data:
                     track_data['LYRICS'] = lyrics_data
+                
+                # Successful API call
+                
                 return track_data
         except Exception as e:
             logger.exception(f"Error getting track info for {track_id}: {e}", exc_info=True)
@@ -980,11 +1081,91 @@ class DeezerAPI:
         has_credentials = self.arl is not None and self.api_token is not None
         
         # Log the state of each component for debugging
-        logger.debug(f"is_authenticated check: initialized={self.initialized}, arl_is_not_none={self.arl is not None} (len={len(self.arl) if self.arl else 0}), api_token_is_not_none={self.api_token is not None} (token_val='{self.api_token[:10] if self.api_token else None}...'")
+        logger.info(f"[IS_AUTHENTICATED] is_authenticated check: initialized={self.initialized}, arl_is_not_none={self.arl is not None} (len={len(self.arl) if self.arl else 0}), api_token_is_not_none={self.api_token is not None} (token_val='{self.api_token[:10] if self.api_token else None}...')")
         
         # Return True if we have credentials (allows sync operations to work)
         # OR if we're fully initialized (async operations)
-        return has_credentials or self.initialized
+        result = has_credentials or self.initialized
+        logger.info(f"[IS_AUTHENTICATED] is_authenticated returning: {result}")
+        return result
+    
+    def is_arl_likely_invalid(self) -> bool:
+        """Check if the ARL token is likely invalid based on error patterns."""
+        # Simple check - just verify we have tokens
+        return not (self.api_token and self.csrf_token)
+    
+    def is_api_healthy(self) -> bool:
+        """Check if the API is in a healthy state for operations."""
+        try:
+            # Check if we have a valid loop
+            if not self.loop or self.loop.is_closed():
+                return False
+            
+            # Check if session exists and is not closed
+            if self.session and self.session.closed:
+                return False
+                
+            # Simple health check - no complex backoff logic
+                    
+            return True
+        except Exception:
+            return False
+    
+    def test_arl_validity(self) -> bool:
+        """Test if the current ARL token is valid by attempting a simple API call."""
+        if not self.arl:
+            logger.error("No ARL token configured")
+            return False
+        
+        try:
+            import requests
+            with requests.Session() as test_session:
+                # Set ARL cookie
+                test_session.cookies.set('arl', self.arl, domain='.deezer.com')
+                
+                # Try to get user data
+                params = {'method': 'deezer.getUserData', 'input': '3', 'api_version': '1.0', 'api_token': ''}
+                response = test_session.get(self.PRIVATE_API_BASE, params=params, timeout=10)
+                response.raise_for_status()
+                data = response.json()
+                
+                if 'error' in data and data['error']:
+                    logger.error(f"ARL validation failed: {data['error']}")
+                    return False
+                
+                if 'results' in data and 'checkForm' in data['results']:
+                    logger.info("ARL token validation successful")
+                    return True
+                else:
+                    logger.error("ARL validation failed: Invalid response format")
+                    return False
+                    
+        except Exception as e:
+            logger.error(f"ARL validation failed with exception: {e}")
+            return False
+    
+    # Removed reset_csrf_error_state method - no longer needed with simplified approach
+    
+    def force_token_refresh_test(self):
+        """Force a token refresh for testing purposes."""
+        logger.info("TESTING: Forcing token refresh...")
+        try:
+            import requests
+            with requests.Session() as test_session:
+                # Set ARL cookie
+                test_session.cookies.set('arl', self.arl, domain='.deezer.com')
+                
+                # Try to refresh token
+                refreshed_token = self._refresh_token_sync(test_session)
+                if refreshed_token:
+                    logger.info(f"TESTING: Token refresh successful: {refreshed_token[:10]}...")
+                    return True
+                else:
+                    logger.error("TESTING: Token refresh failed")
+                    return False
+        except Exception as e:
+            logger.error(f"TESTING: Token refresh exception: {e}")
+            return False
 
     async def get_track_details(self, track_id: int) -> Optional[Dict]:
         """Get detailed track information.
@@ -1119,6 +1300,49 @@ class DeezerAPI:
         except Exception as e:
             logger.error(f"Error getting album details: {e}")
             return None
+
+    def get_album_tracks_sync(self, album_id: int, limit: int = 50, index: int = 0) -> list:
+        """Synchronous version of get_album_tracks.
+        
+        This method is used to fetch album tracks synchronously, avoiding asyncio context issues.
+        
+        Args:
+            album_id (int): The ID of the album
+            limit (int): Maximum number of tracks to fetch per request
+            index (int): Starting index for pagination
+            
+        Returns:
+            list: List of track data or empty list if not available
+        """
+        try:
+            url = f"{self.PUBLIC_API_BASE}/album/{album_id}/tracks"
+            params = {"limit": limit, "index": index}
+            
+            logger.debug(f"Getting album tracks for {album_id} (sync) with params: {params}")
+            
+            # Use requests library for synchronous request
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            
+            data = response.json()
+            if 'error' in data:
+                logger.error(f"Error getting album tracks: {data['error']}")
+                return []
+                
+            if not data or 'data' not in data:
+                logger.error(f"Invalid album tracks response for {album_id}: 'data' field missing")
+                return []
+                
+            tracks_data = data.get('data', [])
+            logger.debug(f"Successfully fetched {len(tracks_data)} tracks for album {album_id} (sync)")
+            return tracks_data
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error getting album tracks: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Error getting album tracks: {e}")
+            return []
 
     async def _get_track_info_private(self, track_id: str) -> Optional[Dict]:
         """Get detailed track information from Deezer's private API.
@@ -1295,8 +1519,15 @@ class DeezerAPI:
         Returns:
             Optional[Dict]: Track details or None if not found/error
         """
-        # Use a single session for the entire synchronous operation
-        with requests.Session() as sync_session:
+        logger.info(f"[SYNC_PRIVATE] get_track_details_sync_private called for track_id: {track_id}")
+        logger.info(f"[SYNC_PRIVATE] Current ARL: {self.arl[:20] if self.arl else None}..., API token: {self.api_token[:10] if self.api_token else None}...")
+        # Use persistent sync session for token continuity
+        if not hasattr(self, 'sync_session') or not self.sync_session:
+            import requests
+            self.sync_session = requests.Session()
+            # Set ARL cookie on the persistent session
+            if self.arl:
+                self.sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
             # Configure proxy for requests session if enabled
             proxy_config = self.config.get_setting('network.proxy', {})
             if proxy_config.get('enabled', False) and proxy_config.get('use_for_api', True):
@@ -1314,26 +1545,32 @@ class DeezerAPI:
                         proxy_url = f"{proxy_type}://{proxy_host}:{proxy_port}"
                     
                     # Set proxies for requests session
-                    sync_session.proxies = {
+                    self.sync_session.proxies = {
                         'http': proxy_url,
                         'https': proxy_url
                     }
                     logger.info(f"[SYNC_URL_FETCH] Using proxy for sync requests: {proxy_type}://{proxy_host}:{proxy_port}")
                 else:
                     logger.warning("[SYNC_URL_FETCH] Proxy enabled but host/port not configured properly")
+        
+        sync_session = self.sync_session
+        try:
             
             try:
-                # Ensure ARL cookie is set on the session
-                if self.arl:
-                    sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
-                else:
-                    logger.error("ARL token is missing. Cannot get private track details.")
+                # ARL cookie already set on persistent session
+                if not self.arl:
+                    logger.error("[SYNC_PRIVATE] ARL token is missing. Cannot get private track details.")
+                    return None
+                
+                # Validate ARL format (should be 192 characters)
+                if len(self.arl) != 192:
+                    logger.error(f"[SYNC_PRIVATE] ARL token has invalid length: {len(self.arl)} characters (expected 192). Please verify your ARL token.")
                     return None
 
-                # Ensure API token is available before making the request
+                # Ensure API token is available and fresh before making the request
                 current_api_token = self.api_token # Work with a local variable
                 if not current_api_token:
-                    logger.info("API token not found, attempting synchronous fetch within session...")
+                    logger.info("[SYNC_PRIVATE] API token not found, attempting synchronous fetch within session...")
                     init_token_params = {
                         'method': 'deezer.getUserData', 'input': '3', 
                         'api_version': '1.0', 'api_token': ''
@@ -1347,33 +1584,63 @@ class DeezerAPI:
                         init_token_data = init_token_response.json()
                         
                         if (init_token_data.get('error') and len(init_token_data['error']) > 0) or 'results' not in init_token_data:
-                            logger.error(f"Failed to get initial token: Invalid response {init_token_data}")
+                            logger.error(f"[SYNC_PRIVATE] Failed to get initial token: Invalid response {init_token_data}")
                             return None # Cannot proceed without token
                             
                         initial_api_token = init_token_data.get('results', {}).get('checkForm', '')
                         if initial_api_token:
-                            logger.info(f"Successfully obtained initial API token: {initial_api_token[:5]}...")
+                            logger.info(f"[SYNC_PRIVATE] Successfully obtained initial API token: {initial_api_token[:5]}...")
                             current_api_token = initial_api_token
-                            self.api_token = initial_api_token # Update the instance variable as well
+                            # Update instance variables for sharing with other threads
+                            self.api_token = initial_api_token
                             self.csrf_token = initial_api_token
+                            self.token_created_at = time.time()
                         else:
-                            logger.error("Failed to get initial token: 'checkForm' missing.")
+                            logger.error("[SYNC_PRIVATE] Failed to get initial token: 'checkForm' missing.")
                             return None # Cannot proceed without token
                             
                     except requests.exceptions.RequestException as init_token_err:
-                         logger.error(f"HTTP error during nested token fetch: {init_token_err}")
+                         logger.error(f"[SYNC_PRIVATE] HTTP error during nested token fetch: {init_token_err}")
                          return None # Network or HTTP error
                     except Exception as init_inner_e:
-                         logger.error(f"Unexpected error during nested token fetch: {init_inner_e}")
+                         logger.error(f"[SYNC_PRIVATE] Unexpected error during nested token fetch: {init_inner_e}")
                          return None # Other error
 
                 # If after attempting fetch, token is still missing, abort.
                 if not current_api_token:
-                     logger.error("API token is missing after fetch attempt. Cannot get private track details.")
+                     logger.error("[SYNC_PRIVATE] API token is missing after fetch attempt. Cannot get private track details.")
                      return None
+
+                # Get the freshest available token before making API request
+                # Check if instance has a newer token than our local copy
+                if self.api_token and self.token_created_at:
+                    current_time = time.time()
+                    token_age = current_time - self.token_created_at
+                    if token_age < 600 and self.api_token != current_api_token:  # Token is less than 10 minutes old
+                        logger.debug(f"[SYNC_PRIVATE] Using fresher token from instance (age: {token_age:.1f}s)")
+                        current_api_token = self.api_token
 
                 # --- Inner function remains similar but uses the outer session --- 
                 def make_api_request(api_token_to_use, retry=True):
+                    
+                    logger.info(f"[SYNC_PRIVATE] make_api_request called for track {track_id} with retry={retry}")
+                    
+                    # Less aggressive token refresh check - only refresh if really old
+                    if self.token_created_at:
+                        current_time = time.time()
+                        age = current_time - self.token_created_at
+                        # Only refresh if token is older than 10 minutes (instead of 6)
+                        if age > 600:  # 10 minutes
+                            logger.info(f"[SYNC_PRIVATE] Token is old ({age:.1f}s), refreshing before pageTrack call...")
+                            refreshed_token = self._refresh_token_sync(sync_session)
+                            if refreshed_token:
+                                api_token_to_use = refreshed_token
+                                logger.info(f"[SYNC_PRIVATE] Token refresh successful: {refreshed_token[:8]}...")
+                            else:
+                                logger.warning(f"[SYNC_PRIVATE] Token refresh failed, continuing with existing token")
+                        else:
+                            logger.debug(f"[SYNC_PRIVATE] Token is still fresh ({age:.1f}s), no refresh needed")
+                    
                     # Use the existing sync_session 
                     params = {
                         'method': 'deezer.pageTrack',
@@ -1393,6 +1660,7 @@ class DeezerAPI:
                             json=json_data,
                             timeout=10
                         )
+                        logger.info(f"[SYNC_PRIVATE] pageTrack response status: {response.status_code}")
                         response.raise_for_status()
                         track_data_response = response.json()
 
@@ -1423,21 +1691,20 @@ class DeezerAPI:
                         raw_track_data_from_api = track_data_response.get('results', {}).get('DATA', {})
                         
                         # TEMPORARY DEBUG LOGGING:
-                        logger.info(f"SYNC Raw DATA for track {track_id}: Keys = {list(raw_track_data_from_api.keys())}") 
-                        
-                        # Check for track number fields in raw data
-                        track_fields = {k: v for k, v in raw_track_data_from_api.items() if 'track' in k.lower() or 'position' in k.lower() or 'number' in k.lower()}
-                        logger.info(f"SYNC Track-related fields for {track_id}: {track_fields}")
+                        logger.debug(f"SYNC Raw DATA for track {track_id}: {raw_track_data_from_api}") 
+                        logger.debug(f"SYNC Keys in raw DATA for track {track_id}: {list(raw_track_data_from_api.keys())}")
 
                         # Process data (this function should handle key conversion, etc.)
                         processed_track_info = self._process_track_data_private(raw_track_data_from_api, str(track_id))
                         
                         if processed_track_info:
                              # TEMPORARY DEBUG LOGGING FOR PROCESSED INFO:
-                            logger.info(f"SYNC Processed track_info for {track_id}: track_number={processed_track_info.get('track_number')}, track_position={processed_track_info.get('track_position')}")
+                            logger.debug(f"SYNC Processed track_info for {track_id}: {processed_track_info}")
+                            logger.debug(f"SYNC Keys in processed track_info for {track_id}: {list(processed_track_info.keys())}")
                             # Specifically check for disk_number
                             logger.debug(f"SYNC disk_number in processed_track_info: {processed_track_info.get('disk_number')}")
-
+                            
+                            # Successful API call
 
                         return processed_track_info
 
@@ -1452,6 +1719,9 @@ class DeezerAPI:
             except Exception as e:
                 logger.error(f"Outer exception in get_track_details_sync_private for {track_id}: {e}", exc_info=True)
                 return None
+        except Exception as e:
+            logger.error(f"Session error in get_track_details_sync_private for {track_id}: {e}", exc_info=True)
+            return None
                 
     def _process_track_data_private(self, raw_data: Dict[str, Any], track_id_str: str) -> Optional[Dict[str, Any]]:
         """Helper to consistently process raw track data from pageTrack into a standardized dict."""
@@ -1586,7 +1856,7 @@ class DeezerAPI:
             'track_token': 'TRACK_TOKEN',
             'track_token_expire': 'TRACK_TOKEN_EXPIRE',
             'disk_number': 'DISK_NUMBER',
-            'track_number': 'SNG_TRACK_NUMBER', # Deezer uses SNG_TRACK_NUMBER for track position
+            'track_number': 'TRACK_NUMBER', # often 'track_position' in other contexts
             'duration': 'DURATION',
             'release_date': 'PHYSICAL_RELEASE_DATE', # Or just 'release_date' if that's primary
             'gain': 'GAIN',
@@ -1600,56 +1870,22 @@ class DeezerAPI:
         for target_key, source_key_uc in key_mappings_to_ensure.items():
             if target_key not in processed_info: # If not already set by initial lowercase conversion
                 if source_key_uc in raw_data:
-                    value = raw_data[source_key_uc]
-                    # Convert numeric fields to int
-                    if target_key in ['disk_number', 'track_number', 'duration'] and value is not None:
-                        try:
-                            processed_info[target_key] = int(value)
-                        except (ValueError, TypeError):
-                            logger.warning(f"Could not convert {target_key} value '{value}' to int for {track_id_str}")
-                            processed_info[target_key] = 1 if target_key in ['disk_number', 'track_number'] else 0
-                    else:
-                        processed_info[target_key] = value
+                    processed_info[target_key] = raw_data[source_key_uc]
                 else:
                     logger.debug(f"Key '{target_key}' (from '{source_key_uc}') not found in raw_data for {track_id_str}")
                     # Set a sensible default or leave as None if appropriate
                     if target_key in ['disk_number', 'track_number', 'duration']:
-                        # Try alternative field names for track number
-                        if target_key == 'track_number':
-                            # Try multiple possible field names, prioritizing SNG_TRACK_NUMBER
-                            alt_value = (raw_data.get('SNG_TRACK_NUMBER') or 
-                                       raw_data.get('TRACK_POSITION') or 
-                                       raw_data.get('POSITION') or 
-                                       raw_data.get('track_position') or
-                                       raw_data.get('position'))
-                            if alt_value:
-                                processed_info[target_key] = int(alt_value)
-                                logger.debug(f"Found track number from alternative field for {track_id_str}: {alt_value}")
-                            else:
-                                processed_info[target_key] = 1  # Default to 1 instead of 0
-                                logger.warning(f"No track number found for {track_id_str}, defaulting to 1")
-                        else:
-                            processed_info[target_key] = processed_info.get(target_key, 0) # Default to 0 for other numerical
+                        processed_info[target_key] = processed_info.get(target_key, 0) # Default to 0 for numerical
                     elif target_key in ['track_token']: # Critical, should log if missing
                         logger.warning(f"Critical key '{target_key}' is missing for {track_id_str}")
                         processed_info[target_key] = None
                     else:
                         processed_info[target_key] = None # Default to None for others
 
-        # Ensure 'track_position' always matches 'track_number' (they should be the same)
-        if 'track_number' in processed_info:
+        # Ensure 'track_position' is also populated if 'track_number' exists
+        if 'track_number' in processed_info and 'track_position' not in processed_info:
             processed_info['track_position'] = processed_info['track_number']
-            logger.info(f"Set track_position to match track_number ({processed_info['track_number']}) for {track_id_str}")
-        
-        # Debug track position information
-        track_num = processed_info.get('track_number', 0)
-        track_pos = processed_info.get('track_position', 0)
-        if track_num == 0 and track_pos == 0:
-            # Log available fields to help debug
-            available_fields = [k for k in raw_data.keys() if 'track' in k.lower() or 'position' in k.lower() or 'number' in k.lower()]
-            logger.warning(f"TRACK_NUMBER_DEBUG: No track position found for {track_id_str}. Available fields: {available_fields}")
-        else:
-            logger.debug(f"TRACK_NUMBER_DEBUG: Track {track_id_str} has track_number={track_num}, track_position={track_pos}")
+            logger.debug(f"Copied track_number to track_position for {track_id_str}")
 
 
         # --- Filesizes ---
@@ -1708,6 +1944,7 @@ class DeezerAPI:
                 logger.info(f"Successfully refreshed API token: {new_api_token[:5]}...")
                 self.api_token = new_api_token
                 self.csrf_token = new_api_token # CSRF token is usually the same as API token
+                self.token_created_at = time.time()  # Update timestamp
                 return new_api_token
             else:
                 logger.error(f"Failed to refresh token: 'checkForm' not in response results. Response: {data}")
@@ -1718,6 +1955,88 @@ class DeezerAPI:
         except Exception as e:
             logger.error(f"Unexpected error during token refresh: {e}", exc_info=True)
             return None
+
+    def ensure_token_freshness_sync(self) -> bool:
+        """Ensure tokens are fresh for upcoming download operations.
+        
+        This method should be called by download workers before starting
+        a batch of downloads to minimize the chance of token expiration
+        during concurrent operations.
+        
+        Returns:
+            bool: True if tokens are fresh/refreshed successfully, False otherwise
+        """
+        logger.info("[TOKEN_FRESHNESS] ensure_token_freshness_sync() method called")
+        try:
+            logger.info(f"[TOKEN_FRESHNESS] Starting token freshness check. ARL set: {bool(self.arl)}, ARL length: {len(self.arl) if self.arl else 0}, Current API token: {bool(self.api_token)}, Token timestamp: {self.token_created_at}")
+            
+            # DEBUG: Log early return conditions
+            if not self.arl:
+                logger.error("[TOKEN_FRESHNESS] Cannot ensure token freshness: No ARL token available")
+                return False
+                
+            # Additional ARL validation
+            if len(self.arl) < 100:  # ARL tokens are typically quite long
+                logger.error(f"[TOKEN_FRESHNESS] ARL token appears too short (length: {len(self.arl)}), may be invalid")
+                return False
+                
+            logger.info("[TOKEN_FRESHNESS] ARL validation passed, proceeding with session setup")
+            # Use persistent sync session for token continuity
+            if not hasattr(self, 'sync_session') or not self.sync_session:
+                import requests
+                logger.info("[TOKEN_FRESHNESS] Creating new sync session")
+                self.sync_session = requests.Session()
+                # Set basic headers to avoid compression issues
+                self.sync_session.headers.update({
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'application/json, text/html, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'identity',  # Disable compression
+                    'DNT': '1',
+                    'Connection': 'keep-alive'
+                })
+                # Set ARL cookie on the persistent session
+                if self.arl:
+                    self.sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
+                    logger.info(f"[TOKEN_FRESHNESS] ARL cookie set on sync session (domain: .deezer.com, value length: {len(self.arl)})")
+                    
+            # Check if tokens need refresh (more aggressive threshold for batch operations)
+            if not self.token_created_at:
+                logger.info("[TOKEN_FRESHNESS] No token timestamp found, refreshing token for download session...")
+                refresh_result = self._refresh_token_sync(self.sync_session)
+                if refresh_result:
+                    logger.info(f"[TOKEN_FRESHNESS] Initial token refresh successful: {refresh_result[:8]}...")
+                    return True
+                else:
+                    logger.error("[TOKEN_FRESHNESS] Initial token refresh failed")
+                    return False
+                
+            current_time = time.time()
+            age = current_time - self.token_created_at
+            
+            # For download operations, be more conservative about token freshness
+            # Refresh if tokens are older than 6 minutes to prevent CSRF issues
+            max_age_for_downloads = 360  # 6 minutes
+            
+            if age > max_age_for_downloads:
+                logger.info(f"[TOKEN_FRESHNESS] Token age is {age:.1f}s (>{max_age_for_downloads}s), refreshing for download session...")
+                refresh_result = self._refresh_token_sync(self.sync_session)
+                if refresh_result:
+                    logger.info(f"[TOKEN_FRESHNESS] Token refresh successful: {refresh_result[:8]}..., storing in instance variables")
+                    # Store the refreshed tokens in instance variables
+                    self.api_token = refresh_result
+                    self.csrf_token = refresh_result
+                    return True
+                else:
+                    logger.error("[TOKEN_FRESHNESS] Token refresh failed")
+                    return False
+            else:
+                logger.info(f"[TOKEN_FRESHNESS] Token age is {age:.1f}s (<{max_age_for_downloads}s), token is fresh enough for downloads")
+                return True
+                
+        except Exception as e:
+            logger.error(f"[TOKEN_FRESHNESS] Exception during token freshness check: {e}", exc_info=True)
+            return False
 
     def get_track_download_url_sync(self, track_id: int, quality: str = 'MP3_320') -> Optional[str]:
         """Synchronous version to get track download URL.
@@ -1731,14 +2050,34 @@ class DeezerAPI:
         Returns:
             Optional[str]: Download URL or None if not available.
         """
+        logger.info(f"[SYNC_URL_FETCH] Enter get_track_download_url_sync for {track_id}")
         logger.debug(f"[SYNC_URL_FETCH] Enter get_track_download_url_sync for {track_id}. Current self.api_token: '{self.api_token[:10] if self.api_token else None}...' Current self.license_token: '{self.license_token[:10] if self.license_token else None}...' ARL set: {bool(self.arl)}")
+        logger.debug(f"[SYNC_URL_FETCH] Token freshness check - token_created_at: {self.token_created_at}")
 
         if not self.is_authenticated(): # Check basic auth state first
             logger.warning("[SYNC_URL_FETCH] Not authenticated (is_authenticated failed). Cannot get sync download URL.")
+            logger.info(f"[SYNC_URL_FETCH] is_authenticated returned False. ARL: {bool(self.arl)}, API token: {bool(self.api_token)}")
             return None
 
-        # Need a requests.Session for cookie/token handling across calls
-        with requests.Session() as sync_session:
+        # Use persistent sync session for token continuity
+        if not hasattr(self, 'sync_session') or not self.sync_session:
+            import requests
+            logger.info("[SYNC_URL_FETCH] Creating new sync session for download URL")
+            self.sync_session = requests.Session()
+            # Set basic headers to avoid compression issues
+            self.sync_session.headers.update({
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json, text/html, */*',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'identity',  # Disable compression globally for sync session
+                'DNT': '1',
+                'Connection': 'keep-alive'
+            })
+            # Set ARL cookie on the persistent session
+            if self.arl:
+                logger.info(f"[SYNC_URL_FETCH] Setting ARL cookie. ARL length: {len(self.arl) if self.arl else 0}")
+                self.sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
+                logger.info(f"[SYNC_URL_FETCH] ARL cookie set. Cookies: {dict(self.sync_session.cookies)}")
             # Configure proxy for requests session if enabled
             proxy_config = self.config.get_setting('network.proxy', {})
             if proxy_config.get('enabled', False) and proxy_config.get('use_for_api', True):
@@ -1756,24 +2095,34 @@ class DeezerAPI:
                         proxy_url = f"{proxy_type}://{proxy_host}:{proxy_port}"
                     
                     # Set proxies for requests session
-                    sync_session.proxies = {
+                    self.sync_session.proxies = {
                         'http': proxy_url,
                         'https': proxy_url
                     }
                     logger.info(f"[SYNC_URL_FETCH] Using proxy for sync requests: {proxy_type}://{proxy_host}:{proxy_port}")
                 else:
                     logger.warning("[SYNC_URL_FETCH] Proxy enabled but host/port not configured properly")
+        
+        sync_session = self.sync_session
+        try:
             
             try:
-                # --- 1. Set ARL Cookie --- 
-                if self.arl:
-                    sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
-                    logger.debug("[SYNC_URL_FETCH] ARL cookie set for sync_session.")
-                else:
+                # --- 1. ARL Cookie Check --- 
+                if not self.arl:
                     logger.error("[SYNC_URL_FETCH] ARL token missing. Cannot get sync download URL.")
                     return None
 
                 # --- 2. Ensure API Token and License Token --- 
+                # Check if we need to proactively refresh tokens
+                logger.info("[SYNC_URL_FETCH] Checking if tokens need to be refreshed")
+                should_refresh = self._should_refresh_tokens()
+                logger.info(f"[SYNC_URL_FETCH] should_refresh_tokens returned: {should_refresh}")
+                if should_refresh:
+                    logger.info("[SYNC_URL_FETCH] Tokens are stale, proactively refreshing before download...")
+                    # Force refresh by clearing current token
+                    self.api_token = None
+                    self.csrf_token = None
+                
                 current_api_token = self.api_token
                 if not current_api_token:
                     logger.info("[SYNC_URL_FETCH] API token not found on instance, attempting nested sync fetch for API token...")
@@ -1848,7 +2197,9 @@ class DeezerAPI:
 
                 # --- 3. Get Track Info (Private API, handles its own token logic) --- 
                 logger.debug("[SYNC_URL_FETCH] Attempting to get track details via get_track_details_sync_private...")
+                logger.info(f"[SYNC_URL_FETCH] Calling get_track_details_sync_private for track {track_id}")
                 track_info = self.get_track_details_sync_private(track_id) # This uses its own session and token logic
+                logger.info(f"[SYNC_URL_FETCH] get_track_details_sync_private returned: {track_info is not None}")
                 if not track_info:
                     logger.error(f"[SYNC_URL_FETCH] Failed to get sync track details for {track_id} via get_track_details_sync_private.")
                     return None
@@ -1876,18 +2227,53 @@ class DeezerAPI:
                 logger.debug(f"[SYNC_URL_FETCH] Calling {media_url} with payload: {{license_token: '{self.license_token[:10]}...', ..., track_tokens: ['{track_token_from_details[:10]}...']}}")
 
                 # Use the *same* sync_session for this call to maintain cookies if necessary (though typically token-based)
-                media_response = sync_session.post(media_url, json=payload, timeout=15)
+                # Add specific headers for media API to avoid compression issues
+                media_headers = {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                    'Accept-Encoding': 'identity',  # Disable compression to avoid garbled responses
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                
+                logger.info(f"[SYNC_URL_FETCH] Making media API request to {media_url}")
+                logger.info(f"[SYNC_URL_FETCH] Payload: {{license_token: '{self.license_token[:10]}...' if self.license_token else None, track_tokens: ['{track_token_from_details[:10]}...'] if track_token_from_details else None}}")
+                media_response = sync_session.post(media_url, json=payload, headers=media_headers, timeout=15)
+                logger.info(f"[SYNC_URL_FETCH] Media API response status: {media_response.status_code}")
                 media_response.raise_for_status()
-                media_data = media_response.json()
+                
+                # Check response headers for debugging
+                logger.debug(f"[SYNC_URL_FETCH] Response headers: {dict(media_response.headers)}")
+                logger.debug(f"[SYNC_URL_FETCH] Response encoding: {media_response.encoding}")
+                
+                # Validate response before parsing JSON
+                response_text = media_response.text.strip()
+                if not response_text:
+                    logger.error(f"[SYNC_URL_FETCH] Empty response from {media_url}")
+                    return None
+                
+                # Check if response looks like binary data (common signs of compression issues)
+                if any(ord(char) < 32 and char not in '\n\r\t' for char in response_text[:100]):
+                    logger.error(f"[SYNC_URL_FETCH] Response appears to be binary/compressed data, not JSON. First 100 chars: {repr(response_text[:100])}")
+                    return None
+                
+                try:
+                    media_data = media_response.json()
+                    logger.info(f"[SYNC_URL_FETCH] Media API response parsed successfully")
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.error(f"[SYNC_URL_FETCH] Invalid JSON response from {media_url}: {response_text[:200]} - Error: {e}")
+                    return None
                 logger.debug(f"[SYNC_URL_FETCH] {media_url} response: {str(media_data)[:200]}...") # Log snippet
+                logger.info(f"[SYNC_URL_FETCH] Media API response keys: {list(media_data.keys()) if isinstance(media_data, dict) else 'Not a dict'}")
 
                 if 'error' in media_data and media_data['error']: # Check for explicit error array
                     logger.error(f"[SYNC_URL_FETCH] Media API error: {media_data['error']}")
+                    logger.info(f"[SYNC_URL_FETCH] Media API error type: {type(media_data['error'])}")
                     return None
 
                 # Check new deezer api response structure
                 if 'data' in media_data and isinstance(media_data['data'], list) and media_data['data']:
                     first_item_data = media_data['data'][0]
+                    logger.info(f"[SYNC_URL_FETCH] First item data keys: {list(first_item_data.keys()) if isinstance(first_item_data, dict) else 'Not a dict'}")
                     if 'errors' in first_item_data and first_item_data['errors']:
                         errors = first_item_data['errors']
                         logger.error(f"[SYNC_URL_FETCH] Media API returned errors in 'data[0].errors': {errors}")
@@ -1899,8 +2285,65 @@ class DeezerAPI:
                             error_message = first_error.get('message', 'Unknown error')
                             
                             if error_code == 2002:
-                                # This is a licensing/rights issue, not a technical problem
-                                return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                # This is a licensing/rights issue for the requested quality
+                                # If we were requesting MP3_320, try MP3_128 before giving up
+                                if quality == 'MP3_320':
+                                    logger.info(f"[SYNC_URL_FETCH] MP3_320 rights error (code 2002), trying MP3_128 fallback...")
+                                    
+                                    fallback_payload = {
+                                        "license_token": self.license_token,
+                                        "media": [{"type": "FULL", "formats": [{"cipher": "BF_CBC_STRIPE", "format": "MP3_128"}]}],
+                                        "track_tokens": [track_token_from_details]
+                                    }
+                                    
+                                    try:
+                                        fallback_response = sync_session.post(media_url, json=fallback_payload, headers=media_headers, timeout=15)
+                                        fallback_response.raise_for_status()
+                                        
+                                        # Validate fallback response
+                                        fallback_text = fallback_response.text.strip()
+                                        if not fallback_text:
+                                            logger.warning(f"[SYNC_URL_FETCH] Empty fallback response")
+                                            return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                        
+                                        # Check if fallback response looks like binary data
+                                        if any(ord(char) < 32 and char not in '\n\r\t' for char in fallback_text[:100]):
+                                            logger.warning(f"[SYNC_URL_FETCH] Fallback response appears to be binary/compressed data")
+                                            return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                        
+                                        try:
+                                            fallback_data = fallback_response.json()
+                                        except (json.JSONDecodeError, ValueError) as e:
+                                            logger.warning(f"[SYNC_URL_FETCH] Invalid JSON in fallback response: {e}")
+                                            return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                        
+                                        # Check if MP3_128 has errors too
+                                        if ('data' in fallback_data and fallback_data['data'] and 
+                                            'errors' in fallback_data['data'][0] and fallback_data['data'][0]['errors']):
+                                            logger.info(f"[SYNC_URL_FETCH] MP3_128 also has rights errors, track truly unavailable")
+                                            return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                        
+                                        # Check if MP3_128 has media
+                                        if ('data' in fallback_data and fallback_data['data'] and 
+                                            'media' in fallback_data['data'][0] and fallback_data['data'][0]['media']):
+                                            
+                                            fallback_media = fallback_data['data'][0]['media'][0]
+                                            if 'sources' in fallback_media and fallback_media['sources']:
+                                                fallback_url = fallback_media['sources'][0].get('url')
+                                                if fallback_url:
+                                                    logger.info(f"[SYNC_URL_FETCH] Track only available in MP3_128 - SKIPPING (user preference: 320 only)")
+                                                    return "QUALITY_SKIP: Track only available in MP3_128, skipped per user preference"
+                                        
+                                        # If we get here, MP3_128 also failed
+                                        logger.info(f"[SYNC_URL_FETCH] MP3_128 fallback also failed, track unavailable")
+                                        return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                        
+                                    except (requests.exceptions.RequestException, json.JSONDecodeError, ValueError) as fallback_e:
+                                        logger.warning(f"[SYNC_URL_FETCH] MP3_128 fallback request failed: {fallback_e}")
+                                        return f"RIGHTS_ERROR: Track not available - {error_message}"
+                                else:
+                                    # For non-320 requests, return the rights error directly
+                                    return f"RIGHTS_ERROR: Track not available - {error_message}"
                             elif error_code in [2001, 4]:  # Other common rights-related errors
                                 return f"RIGHTS_ERROR: Geographic restriction or subscription required - {error_message}"
                             else:
@@ -1910,8 +2353,10 @@ class DeezerAPI:
                         return None
                     if 'media' in first_item_data and isinstance(first_item_data['media'], list) and first_item_data['media']:
                         media_item = first_item_data['media'][0]
+                        logger.info(f"[SYNC_URL_FETCH] Media item keys: {list(media_item.keys()) if isinstance(media_item, dict) else 'Not a dict'}")
                         if 'sources' in media_item and isinstance(media_item['sources'], list) and media_item['sources']:
                             sources = media_item['sources']
+                            logger.info(f"[SYNC_URL_FETCH] Sources count: {len(sources)}")
                             final_url = sources[0].get('url')
                             if final_url:
                                  logger.info(f"[SYNC_URL_FETCH] Successfully got sync download URL: {final_url[:70]}...")
@@ -1923,18 +2368,65 @@ class DeezerAPI:
                             logger.error("[SYNC_URL_FETCH] 'sources' array missing or empty in media_item.")
                             return None
                     else:
-                        logger.error("[SYNC_URL_FETCH] 'media' array missing or empty in first_item_data.")
+                        logger.warning("[SYNC_URL_FETCH] 'media' array missing or empty in first_item_data for requested quality.")
+                        
+                        # QUALITY CHECK: If MP3_320 is not available, check if MP3_128 is available
+                        if quality == 'MP3_320':
+                            logger.info("[SYNC_URL_FETCH] MP3_320 not available for this track, checking MP3_128 availability...")
+                            
+                            fallback_payload = {
+                                "license_token": self.license_token,
+                                "media": [{"type": "FULL", "formats": [{"cipher": "BF_CBC_STRIPE", "format": "MP3_128"}]}],
+                                "track_tokens": [track_token_from_details]
+                            }
+                            
+                            try:
+                                fallback_response = sync_session.post(media_url, json=fallback_payload, headers=media_headers, timeout=15)
+                                fallback_response.raise_for_status()
+                                
+                                # Validate second fallback response
+                                fallback_text = fallback_response.text.strip()
+                                if not fallback_text:
+                                    logger.warning(f"[SYNC_URL_FETCH] Empty second fallback response")
+                                elif any(ord(char) < 32 and char not in '\n\r\t' for char in fallback_text[:100]):
+                                    logger.warning(f"[SYNC_URL_FETCH] Second fallback response appears to be binary/compressed data")
+                                    fallback_data = None
+                                else:
+                                    try:
+                                        fallback_data = fallback_response.json()
+                                    except (json.JSONDecodeError, ValueError) as e:
+                                        logger.warning(f"[SYNC_URL_FETCH] Invalid JSON in second fallback response: {e}")
+                                        fallback_data = None
+                                
+                                if fallback_data and ('data' in fallback_data and fallback_data['data'] and 
+                                    'media' in fallback_data['data'][0] and fallback_data['data'][0]['media']):
+                                    
+                                    fallback_media = fallback_data['data'][0]['media'][0]
+                                    if 'sources' in fallback_media and fallback_media['sources']:
+                                        fallback_url = fallback_media['sources'][0].get('url')
+                                        if fallback_url:
+                                            logger.info(f"[SYNC_URL_FETCH] Track only available in MP3_128 - SKIPPING (user preference: 320 only)")
+                                            # Return special code to indicate 128-only track
+                                            return "QUALITY_SKIP: Track only available in MP3_128, skipped per user preference"
+                                        
+                            except (requests.exceptions.RequestException, json.JSONDecodeError, ValueError) as fallback_e:
+                                logger.warning(f"[SYNC_URL_FETCH] MP3_128 availability check failed: {fallback_e}")
+                        
+                        logger.error(f"[SYNC_URL_FETCH] No download URL available for track at any quality")
                         return None
                 else:
                     logger.error(f"[SYNC_URL_FETCH] Unexpected response structure from {media_url}: 'data' array missing or empty. Response: {str(media_data)[:300]}")
                     return None
 
-            except requests.exceptions.RequestException as e:
-                logger.error(f"[SYNC_URL_FETCH] Request error during sync URL retrieval for {track_id}: {e}")
+            except (requests.exceptions.RequestException, json.JSONDecodeError, ValueError) as e:
+                logger.error(f"[SYNC_URL_FETCH] Request/JSON error during sync URL retrieval for {track_id}: {e}")
                 return None
             except Exception as e:
                 logger.error(f"[SYNC_URL_FETCH] Unexpected error during sync URL retrieval for {track_id}: {e}", exc_info=True)
                 return None
+        except Exception as e:
+            logger.error(f"[SYNC_URL_FETCH] Session error during sync URL retrieval for {track_id}: {e}", exc_info=True)
+            return None
 
     async def get_album_tracks(self, album_id: int, limit: int = 50, index: int = 0) -> list:
         """Fetches tracks for a given album ID using limit and index parameters."""
@@ -2102,8 +2594,8 @@ class DeezerAPI:
         response_text = ""
         
         try:
-            # Use a longer timeout for artist albums requests
-            timeout = aiohttp.ClientTimeout(total=20)  # Increase timeout to 20 seconds
+            # Use optimized timeout for artist albums requests
+            timeout = aiohttp.ClientTimeout(total=8)  # Reduced from 20 to 8 seconds for better performance
             async with session.get(url, timeout=timeout) as response:
                 response_text = await response.text()
                 if response.status == 200:
@@ -2132,6 +2624,115 @@ class DeezerAPI:
         except Exception as e:
             logger.error(f"Unexpected error fetching albums for artist {artist_id}: {e}", exc_info=True)
             return None
+
+    async def get_artist_albums_all(self, artist_id: int, page_size: int = 100, max_pages: int = 10) -> Optional[List[Dict]]:
+        """Fetch all artist releases by paginating through the public API.
+        Returns a combined list of releases (albums/singles/EPs), de-duplicated by ID.
+        """
+        if not artist_id:
+            logger.error("get_artist_albums_all: artist_id is required.")
+            return None
+
+        # Try cache first for aggregated key
+        agg_cache_key = f"artist_{artist_id}_albums_all_page{page_size}_v1"
+        cached = self._load_from_cache(agg_cache_key)
+        if cached is not None and isinstance(cached, list) and len(cached) > 0:
+            logger.debug(f"Returning cached ALL albums for artist {artist_id} (count={len(cached)})")
+            return cached
+
+        all_items: List[Dict] = []
+        seen_ids = set()
+        index = 0
+
+        # Optimize by fetching first few pages concurrently
+        if max_pages > 1:
+            # Fetch first 3 pages concurrently for better performance
+            concurrent_pages = min(3, max_pages)
+            tasks = []
+            for page in range(concurrent_pages):
+                page_index = page * page_size
+                task = asyncio.create_task(
+                    self.get_artist_albums_generic(artist_id, limit=page_size, index=page_index)
+                )
+                tasks.append((page, task))
+            
+            # Wait for concurrent pages with timeout
+            try:
+                results = await asyncio.wait_for(
+                    asyncio.gather(*[task for _, task in tasks], return_exceptions=True),
+                    timeout=15  # Total timeout for concurrent requests
+                )
+                
+                # Process concurrent results
+                for page, result in enumerate(results):
+                    if isinstance(result, Exception):
+                        logger.warning(f"[DeezerAPI] Page {page} failed: {result}")
+                        continue
+                    
+                    if not result:
+                        continue
+                        
+                    # De-duplicate by 'id'
+                    new_count = 0
+                    for item in result:
+                        item_id = item.get('id')
+                        if item_id is None or item_id in seen_ids:
+                            continue
+                        seen_ids.add(item_id)
+                        all_items.append(item)
+                        new_count += 1
+                    
+                    logger.info(f"[DeezerAPI] Concurrent page {page+1}: fetched={len(result)}, added={new_count}, total={len(all_items)}")
+                
+                # Continue with remaining pages sequentially if needed
+                if max_pages > concurrent_pages and len(results) > 0 and len(results[-1]) >= page_size:
+                    for page in range(concurrent_pages, max_pages):
+                        page_index = page * page_size
+                        page_items = await self.get_artist_albums_generic(artist_id, limit=page_size, index=page_index)
+                        if not page_items:
+                            break
+                        
+                        # De-duplicate by 'id'
+                        new_count = 0
+                        for item in page_items:
+                            item_id = item.get('id')
+                            if item_id is None or item_id in seen_ids:
+                                continue
+                            seen_ids.add(item_id)
+                            all_items.append(item)
+                            new_count += 1
+                        
+                        logger.info(f"[DeezerAPI] Sequential page {page+1}: fetched={len(page_items)}, added={new_count}, total={len(all_items)}")
+                        
+                        if len(page_items) < page_size:
+                            break
+                            
+            except asyncio.TimeoutError:
+                logger.warning(f"[DeezerAPI] Concurrent page fetching timed out for artist {artist_id}")
+                # Fall back to sequential fetching for first page only
+                page_items = await self.get_artist_albums_generic(artist_id, limit=page_size, index=0)
+                if page_items:
+                    for item in page_items:
+                        item_id = item.get('id')
+                        if item_id is not None and item_id not in seen_ids:
+                            seen_ids.add(item_id)
+                            all_items.append(item)
+        else:
+            # Single page request
+            page_items = await self.get_artist_albums_generic(artist_id, limit=page_size, index=0)
+            if page_items:
+                for item in page_items:
+                    item_id = item.get('id')
+                    if item_id is not None:
+                        all_items.append(item)
+
+        # Cache aggregated result for faster artist page loads
+        try:
+            self._save_to_cache(agg_cache_key, all_items)
+        except Exception:
+            pass
+
+        return all_items
 
     async def get_playlist_tracks(self, playlist_id: int, limit: int = 500) -> Optional[List[Dict]]:
         """
@@ -2308,12 +2909,19 @@ class DeezerAPI:
         Returns:
             Optional[Dict]: Lyrics data containing sync info and plain text, or None if not found/error
         """
-        with requests.Session() as sync_session:
+        # Use persistent sync session for token continuity
+        if not hasattr(self, 'sync_session') or not self.sync_session:
+            import requests
+            self.sync_session = requests.Session()
+            # Set ARL cookie on the persistent session
+            if self.arl:
+                self.sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
+        
+        sync_session = self.sync_session
+        try:
             try:
-                # Set ARL cookie
-                if self.arl:
-                    sync_session.cookies.set('arl', self.arl, domain='.deezer.com')
-                else:
+                # ARL cookie already set on persistent session
+                if not self.arl:
                     logger.error("ARL token is missing. Cannot get lyrics.")
                     return None
 
@@ -2418,7 +3026,7 @@ class DeezerAPI:
                         
                         if 'error' in data and data['error']:
                             logger.warning(f"Lyrics API returned error for track {track_id}: {data['error']}")
-                            # Check for VALID_TOKEN_REQUIRED error (can be dict or list)
+                            # Simple token error handling like the earlier version
                             if isinstance(data['error'], dict) and 'VALID_TOKEN_REQUIRED' in data['error']:
                                 if retry:
                                     logger.info("Attempting sync token refresh for lyrics (VALID_TOKEN_REQUIRED found)...")
@@ -2428,9 +3036,6 @@ class DeezerAPI:
                                     else:
                                         logger.error("Token refresh failed for lyrics. Cannot get lyrics.")
                                         return None
-                                else:
-                                    logger.error("Token still invalid after refresh attempt for lyrics.")
-                                    return None
                             return None
                         
                         if 'results' not in data:
@@ -2451,3 +3056,223 @@ class DeezerAPI:
             except Exception as e:
                 logger.error(f"Error fetching lyrics for track {track_id} (sync): {e}", exc_info=True)
                 return None
+        except Exception as e:
+            logger.error(f"Session error fetching lyrics for track {track_id}: {e}", exc_info=True)
+            return None
+
+    async def search_tracks_by_artist_name(self, artist_name: str, limit: int = 50, index: int = 0) -> Optional[List[Dict]]:
+        """Search tracks by artist name using the public search API."""
+        if not artist_name:
+            logger.error("search_tracks_by_artist_name: artist_name is required.")
+            return None
+
+        session = await self._get_session()
+        if not session:
+            return None
+
+        # Quote artist name for exact-ish matching
+        query = f"artist:\"{artist_name}\""
+        url = f"{self.PUBLIC_API_BASE}/search/track?q={requests.utils.quote(query)}&limit={limit}&index={index}"
+        logger.info(f"Searching tracks by artist name: {artist_name} -> {url}")
+
+        try:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    logger.error(f"Track search failed: HTTP {response.status}")
+                    return None
+                data = await response.json()
+                return data.get('data', []) if isinstance(data, dict) else None
+        except Exception as e:
+            logger.error(f"Error searching tracks by artist '{artist_name}': {e}")
+            return None
+
+    async def search_albums_by_artist_name(self, artist_name: str, limit: int = 100, index: int = 0) -> Optional[List[Dict]]:
+        """Search albums by artist name using the public search API."""
+        if not artist_name:
+            logger.error("search_albums_by_artist_name: artist_name is required.")
+            return None
+
+        session = await self._get_session()
+        if not session:
+            return None
+
+        query = f"artist:\"{artist_name}\""
+        url = f"{self.PUBLIC_API_BASE}/search/album?q={requests.utils.quote(query)}&limit={limit}&index={index}"
+        logger.info(f"Searching albums by artist name: {artist_name} -> {url}")
+
+        try:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    logger.error(f"Album search failed: HTTP {response.status}")
+                    return None
+                data = await response.json()
+                return data.get('data', []) if isinstance(data, dict) else None
+        except Exception as e:
+            logger.error(f"Error searching albums by artist '{artist_name}': {e}")
+            return None
+
+    async def _search_albums_paginated(self, query: str, page_size: int = 100, max_pages: int = 10) -> List[Dict]:
+        """Generic helper to paginate album search queries."""
+        session = await self._get_session()
+        if not session:
+            return []
+        results: List[Dict] = []
+        seen = set()
+        for page in range(max_pages):
+            index = page * page_size
+            url = f"{self.PUBLIC_API_BASE}/search/album?q={requests.utils.quote(query)}&limit={page_size}&index={index}"
+            try:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        break
+                    data = await response.json()
+                    items = data.get('data', []) if isinstance(data, dict) else []
+                    if not items:
+                        break
+                    added = 0
+                    for it in items:
+                        iid = it.get('id')
+                        if iid in seen:
+                            continue
+                        seen.add(iid)
+                        results.append(it)
+                        added += 1
+                    if len(items) < page_size:
+                        break
+            except Exception:
+                break
+        return results
+
+    async def _search_tracks_by_artist_paginated(self, artist_name: str, page_size: int = 100, max_pages: int = 10) -> List[Dict]:
+        session = await self._get_session()
+        if not session:
+            return []
+        query = f"artist:\"{artist_name}\""
+        results: List[Dict] = []
+        seen = set()
+        for page in range(max_pages):
+            index = page * page_size
+            url = f"{self.PUBLIC_API_BASE}/search/track?q={requests.utils.quote(query)}&limit={page_size}&index={index}"
+            try:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        break
+                    data = await response.json()
+                    items = data.get('data', []) if isinstance(data, dict) else []
+                    if not items:
+                        break
+                    for it in items:
+                        tid = it.get('id')
+                        if tid in seen:
+                            continue
+                        seen.add(tid)
+                        results.append(it)
+                    if len(items) < page_size:
+                        break
+            except Exception:
+                break
+        return results
+
+    async def get_artist_singles_full(self, artist_id: int, max_enrich: int = 200) -> List[Dict]:
+        """Comprehensively collect singles for an artist by combining multiple sources.
+        - Paginated artist releases (public API)
+        - Album search queries (artist:"name" single, artist:"name" (feat ...))
+        - Track search grouped by album
+        Applies de-duplication and light heuristics (record_type == 'single' OR nb_tracks <= 2).
+        """
+        try:
+            artist = await self.get_artist_details(artist_id)
+            if not artist:
+                return []
+            name = artist.get('name', '')
+ 
+            # 1) Artist releases (authoritative)
+            releases = await self.get_artist_albums_all(artist_id, page_size=100, max_pages=10) or []
+            logger.info(f"[SinglesAggregator] releases count: {len(releases)} for artist {artist_id} '{name}'")
+            singles_map: Dict[int, Dict] = {}
+            for it in releases:
+                rid = it.get('id')
+                record_type = (it.get('record_type') or '').lower()
+                nb_tracks = it.get('nb_tracks', 0)
+                if record_type == 'single' or nb_tracks in (1, 2):
+                    if rid is not None:
+                        singles_map[rid] = it
+            logger.info(f"[SinglesAggregator] after releases filter -> unique singles: {len(singles_map)}")
+ 
+            # 2) Album search queries
+            q1 = f'artist:"{name}" single'
+            q2 = f'artist:"{name}" (feat'
+            album_search_results = []
+            album_search_results += await self._search_albums_paginated(q1, page_size=100, max_pages=5)
+            album_search_results += await self._search_albums_paginated(q2, page_size=100, max_pages=5)
+            logger.info(f"[SinglesAggregator] album search results: {len(album_search_results)}")
+            for a in album_search_results:
+                aid = a.get('id')
+                if aid is None or aid in singles_map:
+                    continue
+                singles_map[aid] = a
+            logger.info(f"[SinglesAggregator] after album search merge -> unique singles: {len(singles_map)}")
+ 
+            # 3) Track search grouped by album
+            track_results = await self._search_tracks_by_artist_paginated(name, page_size=100, max_pages=5)
+            logger.info(f"[SinglesAggregator] track search results: {len(track_results)}")
+            for t in track_results:
+                album = t.get('album') or {}
+                aid = album.get('id')
+                if aid and aid not in singles_map:
+                    singles_map[aid] = {
+                        'id': aid,
+                        'title': album.get('title') or t.get('title'),
+                        'artist': {'id': artist_id, 'name': name},
+                        'cover_xl': album.get('cover_xl') or album.get('cover_big') or album.get('cover'),
+                        'nb_tracks': album.get('nb_tracks', 1),
+                        'record_type': 'single'
+                    }
+            logger.info(f"[SinglesAggregator] after track search merge -> unique singles: {len(singles_map)}")
+ 
+            # 4) Optional enrichment: fetch album details for up to max_enrich new items to confirm type
+            final_list: List[Dict] = list(singles_map.values())
+            enrich_candidates = [it for it in final_list if ('record_type' not in it or 'nb_tracks' not in it)]
+            logger.info(f"[SinglesAggregator] enrichment candidates: {len(enrich_candidates)} (cap {max_enrich})")
+            for it in enrich_candidates[:max_enrich]:
+                aid = it.get('id')
+                details = await self.get_album_details(aid)
+                if details:
+                    it.update(details)
+ 
+            # 5) Filter to singles definitively or likely singles
+            filtered: List[Dict] = []
+            seen_ids: set = set()
+            for it in final_list:
+                aid = it.get('id')
+                if aid in seen_ids:
+                    continue
+                seen_ids.add(aid)
+                record_type = (it.get('record_type') or '').lower()
+                nb_tracks = it.get('nb_tracks', 0)
+                title = (it.get('title') or '').lower()
+                if record_type == 'single' or nb_tracks in (1, 2) or '(feat' in title or '(with' in title:
+                    filtered.append(it)
+ 
+            logger.info(f"[SinglesAggregator] filtered final count: {len(filtered)}")
+ 
+            # 6) Fallback: if still empty, use basic releases list filter
+            if not filtered and releases:
+                basic = []
+                seen = set()
+                for it in releases:
+                    rid = it.get('id')
+                    if rid in seen:
+                        continue
+                    seen.add(rid)
+                    record_type = (it.get('record_type') or '').lower()
+                    nb_tracks = it.get('nb_tracks', 0)
+                    if record_type == 'single' or nb_tracks in (1, 2):
+                        basic.append(it)
+                logger.warning(f"[SinglesAggregator] fallback basic singles count: {len(basic)}")
+                return basic
+ 
+            return filtered
+        except Exception as e:
+            logger.error(f"get_artist_singles_full failed for {artist_id}: {e}")
+            return []

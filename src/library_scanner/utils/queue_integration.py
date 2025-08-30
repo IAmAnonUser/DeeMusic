@@ -12,16 +12,33 @@ import sys
 
 from ..core.data_models import MissingAlbum, MissingTrack
 
+# Import the new queue system models
+try:
+    # Add src to path for imports
+    src_path = Path(__file__).parent.parent.parent
+    if str(src_path) not in sys.path:
+        sys.path.insert(0, str(src_path))
+    
+    from src.models.queue_models import QueueItem, ItemType, TrackInfo
+    NEW_QUEUE_SYSTEM_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"New queue system not available: {e}")
+    NEW_QUEUE_SYSTEM_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 class QueueIntegration:
     """Handles integration with DeeMusic's download queue system."""
     
-    def __init__(self, config=None):
+    def __init__(self, config=None, download_service=None):
         """Initialize queue integration."""
         self.config = config
+        self.download_service = download_service  # New download service
         self.deemusic_appdata_path = self._get_deemusic_appdata_path()
-        self.download_queue_path = self.deemusic_appdata_path / "download_queue_state.json"
+        
+        # Support both old and new queue systems
+        self.old_download_queue_path = self.deemusic_appdata_path / "download_queue_state.json"
+        self.new_download_queue_path = self.deemusic_appdata_path / "new_queue_state.json"
         self.library_scanner_queue_path = Path(__file__).parent.parent.parent / "download_queue.json"
     
     def _get_deemusic_appdata_path(self) -> Path:
@@ -47,7 +64,6 @@ class QueueIntegration:
         """Check if DeeMusic's download queue is accessible."""
         try:
             logger.info(f"DEBUG: Checking queue accessibility - AppData path: {self.deemusic_appdata_path}")
-            logger.info(f"DEBUG: Queue file path: {self.download_queue_path}")
             
             # Check if AppData directory exists
             if not self.deemusic_appdata_path.exists():
@@ -56,37 +72,31 @@ class QueueIntegration:
             
             logger.info(f"DEBUG: AppData directory exists")
             
-            # Check if queue file exists, if not we can create it
-            if not self.download_queue_path.exists():
-                logger.info(f"DeeMusic queue file not found, will be created: {self.download_queue_path}")
+            # If we have a download service, we can use the new system directly
+            if self.download_service and NEW_QUEUE_SYSTEM_AVAILABLE:
+                logger.info(f"DEBUG: Using new download service for queue access")
                 return True
             
-            logger.info(f"DEBUG: Queue file exists, trying to read it")
+            # Otherwise check for queue files
+            new_queue_exists = self.new_download_queue_path.exists()
+            old_queue_exists = self.old_download_queue_path.exists()
             
-            # Try to read the existing queue file (handle UTF-8 BOM)
-            data = None
-            try:
-                with open(self.download_queue_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                logger.info(f"DEBUG: Successfully read queue file with UTF-8")
-            except UnicodeDecodeError as bom_error:
-                logger.info(f"DEBUG: UTF-8 failed with BOM error, trying UTF-8-sig: {bom_error}")
-                try:
-                    # Try with utf-8-sig to handle BOM
-                    with open(self.download_queue_path, 'r', encoding='utf-8-sig') as f:
-                        data = json.load(f)
-                    logger.info(f"DEBUG: Successfully read queue file with UTF-8-sig")
-                except Exception as sig_error:
-                    logger.error(f"DEBUG: Both UTF-8 and UTF-8-sig failed: {sig_error}")
-                    raise sig_error
+            logger.info(f"DEBUG: New queue file exists: {new_queue_exists}")
+            logger.info(f"DEBUG: Old queue file exists: {old_queue_exists}")
             
-            if data is not None:
-                logger.info(f"DEBUG: Successfully read queue file, contains {len(data.get('unfinished_downloads', []))} unfinished downloads")
-                logger.info(f"DEBUG: Queue accessibility check passed")
+            # Prefer new queue system if available
+            if new_queue_exists or NEW_QUEUE_SYSTEM_AVAILABLE:
+                logger.info(f"DEBUG: New queue system available")
                 return True
-            else:
-                logger.error(f"DEBUG: Failed to read queue file")
-                return False
+            
+            # Fall back to old queue system
+            if old_queue_exists:
+                logger.info(f"DEBUG: Old queue system available")
+                return True
+            
+            # If no queue files exist, we can create them
+            logger.info(f"DEBUG: No queue files exist, but can be created")
+            return True
             
         except Exception as e:
             logger.error(f"Error checking DeeMusic queue accessibility: {e}")
@@ -195,13 +205,16 @@ class QueueIntegration:
     def _load_deemusic_queue_state(self) -> Dict[str, Any]:
         """Load DeeMusic's download queue state."""
         try:
-            if self.download_queue_path.exists():
+            # Try new queue file first, then fall back to old
+            queue_file = self.new_download_queue_path if self.new_download_queue_path.exists() else self.old_download_queue_path
+            
+            if queue_file.exists():
                 try:
-                    with open(self.download_queue_path, 'r', encoding='utf-8') as f:
+                    with open(queue_file, 'r', encoding='utf-8') as f:
                         return json.load(f)
                 except UnicodeDecodeError:
                     # Try with utf-8-sig to handle BOM
-                    with open(self.download_queue_path, 'r', encoding='utf-8-sig') as f:
+                    with open(queue_file, 'r', encoding='utf-8-sig') as f:
                         return json.load(f)
             else:
                 # Create default structure that matches DeeMusic's expected format
@@ -258,11 +271,13 @@ class QueueIntegration:
                 merged_state["metadata"].update(existing_state["metadata"])
                 merged_state["metadata"]["last_updated"] = datetime.now().isoformat()
             
-            # Save merged state to file
-            with open(self.download_queue_path, 'w', encoding='utf-8') as f:
+            # Save merged state to file (prefer new queue file)
+            queue_file = self.new_download_queue_path if NEW_QUEUE_SYSTEM_AVAILABLE else self.old_download_queue_path
+            
+            with open(queue_file, 'w', encoding='utf-8') as f:
                 json.dump(merged_state, f, indent=2, ensure_ascii=False)
             
-            logger.info(f"Saved DeeMusic queue state to {self.download_queue_path} (preserved existing failed/completed downloads)")
+            logger.info(f"Saved DeeMusic queue state to {queue_file} (preserved existing failed/completed downloads)")
             return True
             
         except Exception as e:
@@ -275,6 +290,12 @@ class QueueIntegration:
             # Ensure unfinished_downloads list exists (this is what DeeMusic expects)
             if "unfinished_downloads" not in queue_state:
                 queue_state["unfinished_downloads"] = []
+            
+            # Skip albums with no missing tracks (they don't need to be downloaded)
+            missing_tracks_count = album_data.get("missing_tracks_count", 0)
+            if missing_tracks_count == 0:
+                logger.info(f"Skipping album '{album_data.get('title', 'Unknown')}' - no missing tracks to download")
+                return False
             
             # Validate album ID
             album_id = str(album_data.get("deezer_id"))
@@ -314,17 +335,34 @@ class QueueIntegration:
                 "added_at": datetime.now().isoformat(),
                 "source": "Library Scanner",
                 "local_album_path": album_data.get("local_album_path"),
-                "missing_tracks_count": album_data.get("missing_tracks_count", 0)
+                "missing_tracks_count": missing_tracks_count
             }
             
             # Add to unfinished downloads (this is what DeeMusic reads on startup)
             queue_state["unfinished_downloads"].append(album_entry)
             
-            logger.info(f"Added album '{album_entry['album_title']}' by '{album_entry['artist_name']}' to DeeMusic queue with {len(queued_tracks)} tracks")
+            logger.info(f"Added album '{album_entry['album_title']}' by '{album_entry['artist_name']}' to DeeMusic queue with {len(queued_tracks)} tracks ({missing_tracks_count} missing)")
             return True
             
         except Exception as e:
             logger.error(f"Error adding album to queue: {e}")
+            return False
+    
+    def _is_track_removed(self, track_id: str) -> bool:
+        """Check if a track was manually removed by user"""
+        try:
+            removed_tracks_file = self.deemusic_appdata_path / 'removed_tracks.json'
+            
+            if not removed_tracks_file.exists():
+                return False
+            
+            with open(removed_tracks_file, 'r', encoding='utf-8') as f:
+                removed_data = json.load(f)
+            
+            return str(track_id) in removed_data.get("removed_tracks", [])
+        
+        except Exception as e:
+            logger.error(f"Error checking removed track: {e}")
             return False
     
     def _get_album_tracks(self, album_id: str) -> List[Dict[str, Any]]:
@@ -341,10 +379,15 @@ class QueueIntegration:
                 tracks = []
                 
                 for track in data.get('data', []):
-                    tracks.append({
-                        'track_id': str(track.get('id', '')),
-                        'title': track.get('title', 'Unknown Title')
-                    })
+                    track_id = str(track.get('id', ''))
+                    # Skip tracks that were manually removed by user
+                    if not self._is_track_removed(track_id):
+                        tracks.append({
+                            'track_id': track_id,
+                            'title': track.get('title', 'Unknown Title')
+                        })
+                    else:
+                        logger.info(f"Skipping removed track {track_id}: {track.get('title', 'Unknown')}")
                 
                 return tracks
             else:
@@ -370,8 +413,10 @@ class QueueIntegration:
         """Get status information about both queues."""
         status = {
             "deemusic_accessible": self.is_deemusic_queue_accessible(),
-            "deemusic_queue_path": str(self.download_queue_path),
+            "new_queue_path": str(self.new_download_queue_path),
+            "old_queue_path": str(self.old_download_queue_path),
             "library_scanner_queue_path": str(self.library_scanner_queue_path),
+            "using_new_system": self.download_service is not None and NEW_QUEUE_SYSTEM_AVAILABLE,
             "selected_albums_count": 0,
             "deemusic_pending_count": 0,
             "deemusic_failed_count": 0,
@@ -401,6 +446,70 @@ class QueueIntegration:
             if not selected_albums:
                 logger.info("No selected albums to import")
                 return True
+            
+            # Try new download service first
+            if self.download_service and NEW_QUEUE_SYSTEM_AVAILABLE:
+                return self._import_albums_with_new_service(selected_albums)
+            
+            # Fall back to old queue system
+            return self._import_albums_with_old_system(selected_albums)
+                
+        except Exception as e:
+            logger.error(f"Error importing albums directly: {e}")
+            return False
+    
+    def _import_albums_with_new_service(self, selected_albums: List[MissingAlbum]) -> bool:
+        """Import albums using the new download service with optimized batch processing."""
+        try:
+            logger.info(f"[QueueIntegration] Using new download service to import {len(selected_albums)} albums")
+            
+            imported_count = 0
+            
+            # Process albums in smaller batches for better performance
+            batch_size = 10
+            for batch_start in range(0, len(selected_albums), batch_size):
+                batch_end = min(batch_start + batch_size, len(selected_albums))
+                batch = selected_albums[batch_start:batch_end]
+                
+                for i, missing_album in enumerate(batch):
+                    overall_index = batch_start + i
+                    
+                    # Skip albums with invalid or missing IDs
+                    album_id = missing_album.deezer_album.id
+                    if not album_id or album_id == 0 or str(album_id) == 'unknown':
+                        logger.warning(f"Skipping album '{missing_album.deezer_album.title}' with invalid ID: {album_id}")
+                        continue
+                    
+                    try:
+                        logger.info(f"[QueueIntegration] Adding album {overall_index+1}/{len(selected_albums)}: '{missing_album.deezer_album.title}' by '{missing_album.deezer_album.artist}' (ID: {album_id})")
+                        
+                        # Use the download service to add the album
+                        success = self.download_service.download_album(album_id)
+                        
+                        if success:
+                            imported_count += 1
+                            logger.info(f"[QueueIntegration] Successfully added album {overall_index+1} to new queue")
+                        else:
+                            logger.warning(f"[QueueIntegration] Failed to add album {overall_index+1} to new queue")
+                            
+                    except Exception as e:
+                        logger.error(f"[QueueIntegration] Error adding album {overall_index+1} to new queue: {e}")
+                
+                # Small delay between batches to prevent overwhelming the system
+                import time
+                time.sleep(0.1)
+            
+            logger.info(f"[QueueIntegration] New service import summary - {imported_count} out of {len(selected_albums)} albums added to queue")
+            return imported_count > 0
+            
+        except Exception as e:
+            logger.error(f"[QueueIntegration] Error importing albums with new service: {e}")
+            return False
+    
+    def _import_albums_with_old_system(self, selected_albums: List[MissingAlbum]) -> bool:
+        """Import albums using the old queue system (fallback)."""
+        try:
+            logger.info(f"[QueueIntegration] Using old queue system to import {len(selected_albums)} albums")
             
             # Check if DeeMusic queue is accessible
             if not self.is_deemusic_queue_accessible():
@@ -453,7 +562,7 @@ class QueueIntegration:
                 return False
                 
         except Exception as e:
-            logger.error(f"Error importing albums directly: {e}")
+            logger.error(f"Error importing albums with old system: {e}")
             return False
     
     def create_import_summary(self, selected_albums: List[Dict[str, Any]]) -> str:
@@ -481,12 +590,16 @@ class QueueIntegration:
                 f"({track_count} tracks, {missing_count} missing)"
             )
         
+        queue_system = "New Queue System" if (self.download_service and NEW_QUEUE_SYSTEM_AVAILABLE) else "Legacy Queue System"
+        queue_path = self.new_download_queue_path if (self.download_service and NEW_QUEUE_SYSTEM_AVAILABLE) else self.old_download_queue_path
+        
         summary_lines.extend([
             f"",
             f"💡 These albums will be added to DeeMusic's download queue",
             f"   and can be downloaded when you open DeeMusic.",
             f"",
-            f"📁 Queue Location: {self.download_queue_path}"
+            f"🔧 Queue System: {queue_system}",
+            f"📁 Queue Location: {queue_path}"
         ])
         
         return "\n".join(summary_lines)

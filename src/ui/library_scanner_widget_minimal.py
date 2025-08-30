@@ -12,12 +12,13 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QPushButton, QProgressBar, QTextEdit, 
     QTreeWidget, QTreeWidgetItem, QGroupBox, QLineEdit,
-    QFileDialog, QMessageBox, QSplitter, QCheckBox
+    QFileDialog, QMessageBox, QSplitter, QCheckBox, QProgressDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont
 import time
 import threading
+import json
 
 # Import QueueIntegration for DeeMusic integration
 try:
@@ -29,6 +30,69 @@ except ImportError as e:
     QUEUE_INTEGRATION_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+class ImportWorker(QThread):
+    """Worker thread for importing albums with progress tracking."""
+    
+    # Signals for progress updates
+    progress_updated = pyqtSignal(int)  # Progress percentage (0-100)
+    current_album_updated = pyqtSignal(str)  # Current album being imported
+    import_completed = pyqtSignal(bool, int)  # (success, imported_count)
+    
+    def __init__(self, selected_albums, queue_integration):
+        super().__init__()
+        self.selected_albums = selected_albums
+        self.queue_integration = queue_integration
+        self.imported_count = 0
+        
+    def run(self):
+        """Run the import process with progress updates."""
+        try:
+            total_albums = len(self.selected_albums)
+            self.imported_count = 0
+            
+            # Process albums in batches for better performance
+            batch_size = 5
+            for batch_start in range(0, total_albums, batch_size):
+                batch_end = min(batch_start + batch_size, total_albums)
+                batch = self.selected_albums[batch_start:batch_end]
+                
+                for i, missing_album in enumerate(batch):
+                    overall_index = batch_start + i
+                    
+                    # Update progress
+                    progress = int((overall_index / total_albums) * 100)
+                    self.progress_updated.emit(progress)
+                    
+                    album_name = f"{missing_album.deezer_album.title} by {missing_album.deezer_album.artist}"
+                    self.current_album_updated.emit(f"Adding ({overall_index+1}/{total_albums}): {album_name}")
+                    
+                    # Skip albums with invalid or missing IDs
+                    album_id = missing_album.deezer_album.id
+                    if not album_id or album_id == 0 or str(album_id) == 'unknown':
+                        logger.warning(f"Skipping album '{missing_album.deezer_album.title}' with invalid ID: {album_id}")
+                        continue
+                    
+                    try:
+                        # Use the download service to add the album
+                        if hasattr(self.queue_integration, 'download_service') and self.queue_integration.download_service:
+                            success = self.queue_integration.download_service.download_album(album_id)
+                            if success:
+                                self.imported_count += 1
+                        
+                    except Exception as e:
+                        logger.error(f"Error adding album {overall_index+1}: {e}")
+            
+            # Final progress update
+            self.progress_updated.emit(100)
+            self.current_album_updated.emit("Import completed!")
+            
+            # Signal completion
+            self.import_completed.emit(self.imported_count > 0, self.imported_count)
+            
+        except Exception as e:
+            logger.error(f"Error in import worker: {e}")
+            self.import_completed.emit(False, 0)
 
 class ScanWorker(QThread):
     """Worker thread for library scanning with detailed progress tracking."""
@@ -58,6 +122,7 @@ class ScanWorker(QThread):
         """Run the scanning process."""
         try:
             self.status_updated.emit("🔍 Initializing scan...")
+            print(f"DEBUG SCAN: Starting scan with paths: {self.library_paths}")
             
             # Collect all files to scan
             all_files = []
@@ -72,6 +137,7 @@ class ScanWorker(QThread):
             else:
                 self.status_updated.emit("🔍 Performing full album scan...")
                 all_files = self._get_all_albums()
+                print(f"DEBUG SCAN: Found {len(all_files)} album folders")
             
             if not all_files:
                 self.status_updated.emit("⚠️ No music files found")
@@ -123,6 +189,7 @@ class ScanWorker(QThread):
                 "scan_type": self.scan_type
             }
             
+            print(f"DEBUG SCAN: Emitting results with {len(scanned_files)} scanned files")
             self.scan_completed.emit(results)
             
         except Exception as e:
@@ -159,9 +226,41 @@ class ScanWorker(QThread):
                 changed_folders.append(lib_path_str)
         
         if len(changed_folders) == 0:
+            # Check if we should force a scan anyway (for debugging/testing)
+            import os
+            force_scan = os.environ.get('DEEMUSIC_FORCE_UPDATE_SCAN', '').lower() == 'true'
+            
+            if force_scan:
+                logger.info("[UpdateScan] FORCE_UPDATE_SCAN enabled - scanning anyway")
+                self.status_updated.emit("🔄 Force scanning (debug mode)")
+                return self.library_paths
+            
             self.status_updated.emit("✅ No changes detected")
+            logger.info(f"[UpdateScan] No changes detected. Previous mtimes: {len(self.previous_mtimes)} entries")
+            
+            # Enhanced debugging: Log detailed mtime comparisons
+            logger.info("[UpdateScan] Detailed mtime comparison:")
+            for lib_path_str in self.library_paths:
+                try:
+                    path = Path(lib_path_str)
+                    if path.exists():
+                        current_mtime = path.stat().st_mtime
+                        prev_mtime = self.previous_mtimes.get(lib_path_str, 0)
+                        diff = abs(current_mtime - prev_mtime)
+                        logger.info(f"[UpdateScan] {path.name}: current={current_mtime:.2f}, previous={prev_mtime:.2f}, diff={diff:.2f}")
+                        
+                        # Also check if there are any new subdirectories
+                        if path.is_dir():
+                            try:
+                                subdir_count = sum(1 for p in path.iterdir() if p.is_dir())
+                                logger.debug(f"[UpdateScan] {path.name}: {subdir_count} subdirectories")
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.debug(f"[UpdateScan] Error checking {lib_path_str}: {e}")
         else:
             self.status_updated.emit(f"🔄 Found changes in {len(changed_folders)} library path(s)")
+            logger.info(f"[UpdateScan] Found changes in {len(changed_folders)} folders: {changed_folders[:3]}...")
         
         return changed_folders
     
@@ -1353,8 +1452,9 @@ class LibraryScannerWidget(QWidget):
         # Set initial UI state first
         self.initialize_ui_state()
         
-        # Load previous results (this will override status if scan data exists)
-        self.load_previous_results()
+        # Don't load previous results during initialization - use lazy loading
+        # self.load_previous_results()  # Moved to lazy loading
+        self._results_loaded = False
     
     def get_appdata_path(self) -> Path:
         """Get the DeeMusic AppData directory path."""
@@ -1378,6 +1478,9 @@ class LibraryScannerWidget(QWidget):
     
     def load_previous_results(self):
         """Load previous scan and comparison results from AppData."""
+        if self._results_loaded:
+            return  # Already loaded
+            
         try:
             logger.info("Loading previous results...")
             appdata_path = self.get_appdata_path()
@@ -1396,9 +1499,18 @@ class LibraryScannerWidget(QWidget):
             comparison_results_path = appdata_path / "fast_comparison_results.json"
             if comparison_results_path.exists():
                 self.load_comparison_results(comparison_results_path)
+            
+            self._results_loaded = True
                 
         except Exception as e:
             logger.error(f"Error loading previous results: {e}")
+    
+    def showEvent(self, event):
+        """Override showEvent to load data when widget is actually shown."""
+        super().showEvent(event)
+        if not self._results_loaded:
+            logger.info("Library scanner widget shown, loading previous results...")
+            self.load_previous_results()
     
     def load_scan_results(self, scan_results_path: Path):
         """Load scan results from file."""
@@ -1734,7 +1846,7 @@ class LibraryScannerWidget(QWidget):
         self.filter_live_checkbox.stateChanged.connect(self.apply_filters)
         filter_layout.addWidget(self.filter_live_checkbox)
         
-        self.filter_duplicates_checkbox = QCheckBox("Filter out Deluxe/Remaster duplicates")
+        self.filter_duplicates_checkbox = QCheckBox("Filter out Deluxe, Remaster etc duplicates")
         self.filter_duplicates_checkbox.setChecked(True)
         self.filter_duplicates_checkbox.stateChanged.connect(self.apply_filters)
         filter_layout.addWidget(self.filter_duplicates_checkbox)
@@ -2104,8 +2216,9 @@ class LibraryScannerWidget(QWidget):
             
             for album_data in missing_albums:
                 if isinstance(album_data, dict):
-                    album_title = album_data.get('title', 'Unknown Album')
-                    album_artist = album_data.get('artist', artist_name)
+                    # Handle both Deezer format ('title', 'artist') and local format ('album', 'album_artist')
+                    album_title = album_data.get('title') or album_data.get('album', 'Unknown Album')
+                    album_artist = album_data.get('artist') or album_data.get('album_artist', artist_name)
                 else:
                     album_title = str(album_data)
                     album_artist = artist_name
@@ -2214,6 +2327,19 @@ class LibraryScannerWidget(QWidget):
         except Exception as e:
             logger.error(f"Error saving folder mtimes: {e}")
     
+    def save_file_mtimes(self, mtimes: Dict[str, float]):
+        """Save file modification times to AppData (for incremental scans)."""
+        try:
+            appdata_path = self.get_appdata_path()
+            appdata_path.mkdir(parents=True, exist_ok=True)
+            mtimes_path = appdata_path / "folder_mtimes.json"  # Use same file as folder mtimes
+            
+            with open(mtimes_path, 'w', encoding='utf-8') as f:
+                json.dump(mtimes, f, indent=2)
+            logger.info(f"Saved file mtimes for {len(mtimes)} files")
+        except Exception as e:
+            logger.error(f"Error saving file mtimes: {e}")
+    
     def get_folder_mtime(self, folder_path: Path) -> float:
         """Get the modification time of a folder."""
         try:
@@ -2232,9 +2358,12 @@ class LibraryScannerWidget(QWidget):
         self.show_progress_ui()
         
         # Create and start scan worker
+        print(f"DEBUG: Creating scan worker with paths: {library_paths}")
         self.scan_worker = ScanWorker(library_paths, scan_type="full")
         self.connect_scan_worker_signals()
+        print(f"DEBUG: Starting scan worker...")
         self.scan_worker.start()
+        print(f"DEBUG: Scan worker started, is running: {self.scan_worker.isRunning()}")
     
     def show_progress_ui(self):
         """Show the progress tracking UI elements."""
@@ -2305,9 +2434,21 @@ class LibraryScannerWidget(QWidget):
         try:
             self.hide_progress_ui()
             
+            # Debug logging
+            logger.info(f"DEBUG: Scan completed with results type: {results.get('type', 'unknown')}")
+            logger.info(f"DEBUG: Results keys: {list(results.keys())}")
+            logger.info(f"DEBUG: Scanned files count: {len(results.get('scanned_files', []))}")
+            
             if results["type"] == "success":
                 total_files = results["total_files"]
                 scan_time = results["scan_time"]
+                scanned_files = results.get("scanned_files", [])
+                
+                # Debug: Log first few scanned files
+                if scanned_files:
+                    logger.info(f"DEBUG: First scanned file sample: {scanned_files[0]}")
+                else:
+                    logger.warning("DEBUG: No scanned files found in results!")
                 
                 # Update status
                 self.status_label.setText(f"✅ Scan completed - {total_files:,} files in {scan_time:.1f}s")
@@ -2324,7 +2465,6 @@ class LibraryScannerWidget(QWidget):
                 
                 # Reload the scan results into local_albums for comparison
                 logger.info("Reloading scan results into local_albums...")
-                logger.info(f"DEBUG: Results keys: {list(results.keys())}")
                 self.local_albums = results.get("scanned_files", [])
                 logger.info(f"Loaded {len(self.local_albums)} files into local_albums")
                 
@@ -2361,21 +2501,75 @@ class LibraryScannerWidget(QWidget):
             
             # Save scan results in album format (compatible with library scanner)
             scan_results_path = appdata_path / "scan_results.json"
+            library_paths = self.config.get_setting('library_scanner.library_paths', [])
+            
+            # Debug logging
+            logger.info(f"Saving scan results: {len(results.get('scanned_files', []))} albums")
+            logger.info(f"Results keys: {list(results.keys())}")
+            
+            # Debug: Print the actual results structure
+            print(f"DEBUG SAVE: Results type: {results.get('type')}")
+            print(f"DEBUG SAVE: Scanned files count: {len(results.get('scanned_files', []))}")
+            print(f"DEBUG SAVE: Library paths: {library_paths}")
+            if results.get('scanned_files'):
+                print(f"DEBUG SAVE: First scanned file: {results['scanned_files'][0]}")
+            
             with open(scan_results_path, 'w', encoding='utf-8') as f:
                 json.dump({
                     'scan_timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
                     'scan_time': results['scan_time'],
                     'scan_type': results['scan_type'],
-                    'library_paths': self.library_paths,
+                    'library_paths': library_paths,
                     'albums': results['scanned_files'],  # Now contains album data, not file data
                     'album_count': len(results['scanned_files'])
                 }, f, indent=2, ensure_ascii=False)
             
             logger.info(f"Saved {len(results['scanned_files'])} albums to {scan_results_path}")
             
+            # Also save folder modification times for future incremental scans
+            self.save_current_folder_mtimes()
+            
         except Exception as e:
             logger.error(f"Error saving scan results: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            print(f"ERROR SAVING: {e}")
+            print(f"ERROR TRACEBACK: {traceback.format_exc()}")
     
+    def save_current_folder_mtimes(self):
+        """Save current folder modification times for incremental scans."""
+        try:
+            library_paths = self.config.get_setting('library_scanner.library_paths', [])
+            folder_mtimes = {}
+            
+            print(f"DEBUG MTIMES: Library paths: {library_paths}")
+            
+            for lib_path in library_paths:
+                try:
+                    path = Path(lib_path)
+                    if path.exists():
+                        folder_mtimes[str(path)] = path.stat().st_mtime
+                        
+                        # Also save mtimes for subdirectories (for more granular change detection)
+                        for subfolder in path.rglob('*'):
+                            if subfolder.is_dir():
+                                try:
+                                    folder_mtimes[str(subfolder)] = subfolder.stat().st_mtime
+                                except Exception:
+                                    pass  # Skip folders we can't access
+                except Exception as e:
+                    logger.warning(f"Could not get mtime for {lib_path}: {e}")
+            
+            if folder_mtimes:
+                print(f"DEBUG MTIMES: Saving {len(folder_mtimes)} folder mtimes")
+                self.save_folder_mtimes(folder_mtimes)
+                logger.info(f"Saved modification times for {len(folder_mtimes)} folders")
+            else:
+                print("DEBUG MTIMES: No folder mtimes to save")
+            
+        except Exception as e:
+            logger.error(f"Error saving current folder mtimes: {e}")
+            print(f"ERROR MTIMES: {e}")
 
     def cancel_scan(self):
         """Cancel the current scan."""
@@ -2487,10 +2681,15 @@ class LibraryScannerWidget(QWidget):
                                     cover_url=album_data.get('cover_medium', album_data.get('cover_url'))
                                 )
                                 
+                                # For Library Scanner albums, we assume all tracks are missing since the album is not in the library
+                                # Create placeholder missing tracks based on track count
+                                track_count = deezer_album.track_count or 1  # At least 1 track
+                                missing_tracks = [f"track_{i}" for i in range(track_count)]  # Placeholder track list
+                                
                                 missing_album = MissingAlbum(
                                     deezer_album=deezer_album,
                                     local_album=None,
-                                    missing_tracks=[]
+                                    missing_tracks=missing_tracks
                                 )
                                 
                                 selected_albums.append(missing_album)
@@ -2504,13 +2703,16 @@ class LibraryScannerWidget(QWidget):
                                     title=album_title,
                                     artist=artist_name,
                                     year=None,
-                                    track_count=0
+                                    track_count=1  # Assume at least 1 track
                                 )
+                                
+                                # For Library Scanner albums, assume at least 1 missing track
+                                missing_tracks = ["track_1"]  # Placeholder track
                                 
                                 missing_album = MissingAlbum(
                                     deezer_album=deezer_album,
                                     local_album=None,
-                                    missing_tracks=[]
+                                    missing_tracks=missing_tracks
                                 )
                                 
                                 selected_albums.append(missing_album)
@@ -2519,8 +2721,20 @@ class LibraryScannerWidget(QWidget):
                 QMessageBox.information(self, "No Selection", "Please select albums to import.")
                 return
             
-            # Initialize QueueIntegration
-            queue_integration = QueueIntegration(self.config)
+            # Initialize QueueIntegration with download service if available
+            download_service = None
+            try:
+                # Try to get the download service from the main window
+                main_window = self.window()
+                if main_window and hasattr(main_window, 'download_service'):
+                    download_service = main_window.download_service
+                    logger.info(f"[LibraryScanner] Found download service: {download_service is not None}")
+                else:
+                    logger.info(f"[LibraryScanner] No download service found, using fallback")
+            except Exception as e:
+                logger.warning(f"[LibraryScanner] Error getting download service: {e}")
+            
+            queue_integration = QueueIntegration(self.config, download_service)
             
             # Check if DeeMusic queue is accessible
             if not queue_integration.is_deemusic_queue_accessible():
@@ -2553,76 +2767,26 @@ class LibraryScannerWidget(QWidget):
                 return
             
             # Import albums directly to DeeMusic queue (skip intermediate file)
-            if queue_integration.import_albums_directly(selected_albums):
-                # Ask user if they want to try reloading the queue or restart DeeMusic
-                reply = QMessageBox.question(
-                    self,
-                    "Import Successful",
-                    f"Successfully imported {selected_count} albums to DeeMusic download queue!\n\n"
-                    f"📋 To load the new albums, you can either:\n\n"
-                    f"🔄 Try to reload the queue now (experimental)\n"
-                    f"🔁 Restart DeeMusic (recommended)\n\n"
-                    f"Would you like to try reloading the queue now?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No
-                )
-                
-                if reply == QMessageBox.StandardButton.Yes:
-                    # Try to reload the queue
-                    try:
-                        # Get the main window and its download manager
-                        main_window = self.parent()
-                        while main_window and not hasattr(main_window, 'download_manager'):
-                            main_window = main_window.parent()
-                        
-                        if main_window and hasattr(main_window, 'download_manager'):
-                            if main_window.download_manager.reload_queue_from_disk():
-                                QMessageBox.information(
-                                    self,
-                                    "Queue Reloaded",
-                                    "Download queue reloaded successfully! The new albums should now appear in the Download Queue."
-                                )
-                            else:
-                                QMessageBox.warning(
-                                    self,
-                                    "Reload Failed",
-                                    "Failed to reload the download queue. Please restart DeeMusic to load the new albums."
-                                )
-                        else:
-                            QMessageBox.information(
-                                self,
-                                "Manual Restart Required",
-                                "Please restart DeeMusic to load the new albums into the download queue."
-                            )
-                    except Exception as e:
-                        logger.error(f"Error reloading queue: {e}")
-                        QMessageBox.warning(
-                            self,
-                            "Reload Error",
-                            "An error occurred while reloading the queue. Please restart DeeMusic to load the new albums."
-                        )
-                else:
-                    QMessageBox.information(
-                        self,
-                        "Restart Required",
-                        "Please restart DeeMusic to load the new albums into the download queue."
-                    )
-                
-                # Uncheck all selected items
-                for i in range(self.albums_tree.topLevelItemCount()):
-                    album_item = self.albums_tree.topLevelItem(i)
-                    if album_item.checkState(0) == Qt.CheckState.Checked:
-                        album_item.setCheckState(0, Qt.CheckState.Unchecked)
-                
-                # Update import button state
-                self.update_import_button_state()
-                
-            else:
-                QMessageBox.critical(
-                    self,
-                    "Import Failed",
-                    "Failed to import selected albums to DeeMusic queue. Please try again."
-                )
+            # Create and show progress dialog
+            progress_dialog = QProgressDialog("Preparing import...", "Cancel", 0, 100, self)
+            progress_dialog.setWindowTitle("Importing Albums")
+            progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+            progress_dialog.setMinimumDuration(0)
+            progress_dialog.show()
+            
+            # Create and start import worker
+            self.import_worker = ImportWorker(selected_albums, queue_integration)
+            
+            # Connect signals
+            self.import_worker.progress_updated.connect(progress_dialog.setValue)
+            self.import_worker.current_album_updated.connect(progress_dialog.setLabelText)
+            self.import_worker.import_completed.connect(lambda success, count: self._on_import_completed(success, count, selected_count, progress_dialog))
+            
+            # Handle cancel button
+            progress_dialog.canceled.connect(lambda: self._cancel_import(progress_dialog))
+            
+            # Start import
+            self.import_worker.start()
                 
         except Exception as e:
             logger.error(f"Error during import: {e}")
@@ -2631,6 +2795,63 @@ class LibraryScannerWidget(QWidget):
                 "Import Error",
                 f"An error occurred during import:\n\n{str(e)}\n\nPlease try again or check the logs for more details."
             )
+                
+    def _on_import_completed(self, success, imported_count, total_count, progress_dialog):
+        """Handle import completion."""
+        try:
+            # Close progress dialog
+            progress_dialog.close()
+            
+            if success and imported_count > 0:
+                # Show updated success message
+                QMessageBox.information(
+                    self,
+                    "Import Successful",
+                    f"🎵 Successfully imported {imported_count} of {total_count} albums to DeeMusic!\n\n"
+                    f"✅ Albums have been added to the download queue and downloads will start automatically.\n\n"
+                    f"💡 You can monitor progress in the Download Queue tab."
+                )
+                
+                # Uncheck all selected items
+                for i in range(self.albums_tree.topLevelItemCount()):
+                    album_item = self.albums_tree.topLevelItem(i)
+                    if album_item.checkState(0) == Qt.CheckState.Checked:
+                        album_item.setCheckState(0, Qt.CheckState.Unchecked)
+                
+                # Update the import button state
+                self.update_import_button_state()
+                
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Import Failed",
+                    f"Failed to import albums to DeeMusic queue.\n\n"
+                    f"Imported: {imported_count} of {total_count} albums\n\n"
+                    f"Please check the logs for more details and try again."
+                )
+                
+        except Exception as e:
+            logger.error(f"Error handling import completion: {e}")
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"An error occurred while completing the import: {e}"
+            )
+    
+    def _cancel_import(self, progress_dialog):
+        """Handle import cancellation."""
+        try:
+            if hasattr(self, 'import_worker') and self.import_worker.isRunning():
+                self.import_worker.terminate()
+                self.import_worker.wait()
+            progress_dialog.close()
+            QMessageBox.information(
+                self,
+                "Import Cancelled",
+                "Album import has been cancelled."
+            )
+        except Exception as e:
+            logger.error(f"Error cancelling import: {e}")
     
     def compare_with_deezer(self):
         """Compare the library scan results with Deezer to find missing albums."""
@@ -2827,7 +3048,11 @@ class LibraryScannerWidget(QWidget):
     
     def _is_album_selected(self, artist_name, album_data):
         """Check if an album is selected globally."""
-        album_title = album_data.get('title', 'Unknown') if isinstance(album_data, dict) else str(album_data)
+        if isinstance(album_data, dict):
+            # Handle both Deezer format ('title', 'artist') and local format ('album', 'album_artist')
+            album_title = album_data.get('title') or album_data.get('album', 'Unknown')
+        else:
+            album_title = str(album_data)
         lookup_key = (artist_name, album_title)
         is_selected = lookup_key in self.selected_albums_global
         logger.debug(f"DEBUG: _is_album_selected - Looking for {lookup_key}, found: {is_selected}")
@@ -2876,19 +3101,190 @@ class LibraryScannerWidget(QWidget):
             if reply != QMessageBox.StandardButton.Yes:
                 return
             
-            # For now, just run a full comparison but with a different message
-            # TODO: Implement true incremental comparison logic
-            QMessageBox.information(
-                self,
-                "Feature Coming Soon",
-                "Incremental comparison is not yet fully implemented.\n\n"
-                "Please use the full 'Compare with Deezer' for now.\n\n"
-                "This feature will be added in a future update."
-            )
+            # Implement incremental comparison logic
+            self.start_incremental_comparison()
             
         except Exception as e:
             logger.error(f"Error in incremental comparison: {e}")
             QMessageBox.critical(self, "Error", f"Failed to start incremental comparison: {str(e)}")
+    
+    def start_incremental_comparison(self):
+        """Start incremental comparison with Deezer."""
+        try:
+            logger.info("Starting incremental comparison with Deezer...")
+            
+            # Get the timestamp of the last comparison
+            last_comparison_time = self.fast_comparison_results.get('timestamp', 0)
+            logger.info(f"Last comparison timestamp: {last_comparison_time}")
+            
+            # Get albums that have been modified since the last comparison
+            new_or_updated_albums = self.get_albums_modified_since(last_comparison_time)
+            
+            if not new_or_updated_albums:
+                QMessageBox.information(
+                    self,
+                    "No Changes Found",
+                    "No new or updated albums found since the last comparison.\n\n"
+                    "Your comparison results are up to date."
+                )
+                return
+            
+            logger.info(f"Found {len(new_or_updated_albums)} new/updated albums for incremental comparison")
+            
+            # Show progress and start comparison
+            self.status_label.setText(f"🔄 Comparing {len(new_or_updated_albums)} updated albums...")
+            
+            # Start the comparison worker with only the new/updated albums
+            self.start_comparison_worker(new_or_updated_albums, incremental=True)
+            
+        except Exception as e:
+            logger.error(f"Error starting incremental comparison: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to start incremental comparison: {str(e)}")
+    
+    def get_albums_modified_since(self, timestamp):
+        """Get albums that have been modified since the given timestamp."""
+        try:
+            if not self.local_albums:
+                return []
+            
+            # Load folder modification times to check for changes
+            appdata_path = self.get_appdata_path()
+            folder_mtimes_path = appdata_path / "folder_mtimes.json"
+            
+            folder_mtimes = {}
+            if folder_mtimes_path.exists():
+                try:
+                    with open(folder_mtimes_path, 'r', encoding='utf-8') as f:
+                        folder_mtimes = json.load(f)
+                except Exception as e:
+                    logger.warning(f"Could not load folder mtimes: {e}")
+            
+            # Get albums from folders that have been modified since the last comparison
+            modified_albums = []
+            
+            for album in self.local_albums:
+                album_folder = album.get('folder_path', '')
+                if not album_folder:
+                    continue
+                
+                # Check if this album's folder has been modified since last comparison
+                folder_mtime = folder_mtimes.get(album_folder, 0)
+                
+                # If folder was modified after the last comparison, include it
+                if folder_mtime > timestamp:
+                    modified_albums.append(album)
+                    logger.debug(f"Including modified album: {album.get('album_artist', 'Unknown')} - {album.get('album', 'Unknown')}")
+            
+            # If we don't have folder mtimes, fall back to checking scan timestamp
+            if not modified_albums and not folder_mtimes:
+                # Check if the scan results are newer than the last comparison
+                scan_results_path = appdata_path / "scan_results.json"
+                if scan_results_path.exists():
+                    scan_mtime = scan_results_path.stat().st_mtime
+                    if scan_mtime > timestamp:
+                        # If scan is newer, include all albums (full comparison)
+                        logger.info("Scan results are newer than last comparison, including all albums")
+                        modified_albums = self.local_albums
+                    else:
+                        logger.info("No changes detected since last comparison")
+            
+            return modified_albums
+            
+        except Exception as e:
+            logger.error(f"Error getting modified albums: {e}")
+            return []
+    
+    def start_comparison_worker(self, albums_to_compare, incremental=False):
+        """Start the comparison worker with specified albums."""
+        try:
+            logger.info(f"Starting comparison worker with {len(albums_to_compare)} albums (incremental: {incremental})")
+            
+            # Create and start comparison worker
+            self.comparison_worker = ComparisonWorker(albums_to_compare, self.config)
+            
+            # Connect signals
+            self.comparison_worker.progress_updated.connect(self.update_comparison_progress)
+            self.comparison_worker.status_updated.connect(self.update_comparison_status)
+            self.comparison_worker.comparison_completed.connect(
+                lambda results: self.on_incremental_comparison_completed(results) if incremental 
+                else self.on_comparison_completed(results)
+            )
+            self.comparison_worker.comparison_error.connect(self.on_comparison_error)
+            
+            # Start the worker
+            self.comparison_worker.start()
+            
+        except Exception as e:
+            logger.error(f"Error starting comparison worker: {e}")
+            QMessageBox.critical(self, "Error", f"Failed to start comparison: {str(e)}")
+    
+    def on_incremental_comparison_completed(self, results):
+        """Handle incremental comparison completion."""
+        try:
+            logger.info("Incremental comparison completed")
+            
+            # Merge the new results with existing results
+            if hasattr(self, 'fast_comparison_results') and self.fast_comparison_results:
+                # Update existing results with new data
+                existing_results = self.fast_comparison_results.get('results', {})
+                new_results = results.get('results', {})
+                
+                # Merge artist data
+                existing_artists = existing_results.get('artists', {})
+                new_artists = new_results.get('artists', {})
+                
+                for artist_name, artist_data in new_artists.items():
+                    existing_artists[artist_name] = artist_data
+                
+                # Update statistics
+                existing_stats = existing_results.get('statistics', {})
+                new_stats = new_results.get('statistics', {})
+                
+                # Recalculate totals
+                total_missing = sum(len(artist_data.get('missing_albums', [])) 
+                                  for artist_data in existing_artists.values())
+                
+                existing_stats.update({
+                    'total_missing_albums': total_missing,
+                    'last_incremental_update': time.time()
+                })
+                
+                # Update the complete results
+                merged_results = {
+                    'results': {
+                        'artists': existing_artists,
+                        'statistics': existing_stats
+                    },
+                    'timestamp': time.time(),
+                    'version': '1.0'
+                }
+                
+                self.fast_comparison_results = merged_results
+            else:
+                # No existing results, treat as full comparison
+                self.fast_comparison_results = {
+                    'results': results,
+                    'timestamp': time.time(),
+                    'version': '1.0'
+                }
+            
+            # Save the updated results
+            self.save_comparison_results(self.fast_comparison_results)
+            
+            # Update UI
+            self.populate_comparison_ui(self.fast_comparison_results.get('results', {}))
+            
+            # Update status
+            total_missing = sum(len(artist_data.get('missing_albums', [])) 
+                              for artist_data in self.fast_comparison_results.get('results', {}).get('artists', {}).values())
+            
+            self.status_label.setText(f"✅ Incremental comparison completed - {total_missing} missing albums found")
+            
+            logger.info(f"Incremental comparison completed with {total_missing} missing albums")
+            
+        except Exception as e:
+            logger.error(f"Error handling incremental comparison completion: {e}")
+            self.on_comparison_error(str(e))
     
     def initialize_ui_state(self):
         """Initialize the UI state based on current configuration."""
@@ -2972,7 +3368,12 @@ class LibraryScannerWidget(QWidget):
     def apply_filters(self):
         """Apply filters to the comparison results."""
         if not hasattr(self, 'fast_comparison_results') or not self.fast_comparison_results:
+            logger.debug("FILTER_DEBUG: No comparison results to filter")
             return
+        
+        filter_live = self.filter_live_checkbox.isChecked()
+        filter_duplicates = self.filter_duplicates_checkbox.isChecked()
+        logger.info(f"FILTER_DEBUG: Applying filters - Live: {filter_live}, Duplicates: {filter_duplicates}")
         
         # Re-populate with filters applied
         self.populate_comparison_ui_with_filters(self.fast_comparison_results)
@@ -3000,8 +3401,13 @@ class LibraryScannerWidget(QWidget):
                         continue
                     
                     # Filter out duplicates (deluxe/remaster)
-                    if filter_duplicates and self.is_duplicate_album(album_title, missing_albums):
-                        continue
+                    local_albums = artist_info.get('local_albums', [])
+                    if filter_duplicates:
+                        is_duplicate = self.is_duplicate_album(album_title, missing_albums, local_albums)
+                        logger.debug(f"FILTER_DEBUG: '{album_title}' -> duplicate: {is_duplicate}, local_albums: {local_albums}")
+                        if is_duplicate:
+                            logger.info(f"FILTERING OUT: '{album_title}' (duplicate/deluxe edition)")
+                            continue
                     
                     # Special handling for self-titled albums (like "311" by 311)
                     # Check if this album is actually in the local library but wasn't matched correctly
@@ -3032,9 +3438,14 @@ class LibraryScannerWidget(QWidget):
         album_lower = album_title.lower()
         return any(keyword in album_lower for keyword in live_keywords)
     
-    def is_duplicate_album(self, album_title: str, all_albums: List) -> bool:
+    def is_duplicate_album(self, album_title: str, all_albums: List, local_albums: List = None) -> bool:
         """Check if album is a duplicate (deluxe/remaster when normal version exists)."""
-        duplicate_keywords = ['deluxe', 'remaster', 'remastered', 'expanded', 'special edition', 'anniversary']
+        duplicate_keywords = [
+            'deluxe', 'remaster', 'remastered', 'expanded', 'special edition', 
+            'anniversary', 'collector', 'limited edition', 'extended', 'bonus',
+            'super deluxe', 'platinum edition', 'gold edition', 'ultimate',
+            'complete edition', 'director\'s cut', 'enhanced', 'redux'
+        ]
         album_lower = album_title.lower()
         
         # If this album has duplicate keywords
@@ -3042,14 +3453,29 @@ class LibraryScannerWidget(QWidget):
             # Check if a "normal" version exists
             base_title = album_lower
             for keyword in duplicate_keywords:
-                base_title = base_title.replace(keyword, '').strip()
-                base_title = base_title.replace('()', '').replace('[]', '').strip()
+                # Remove the keyword and common patterns around it
+                base_title = base_title.replace(f'({keyword})', '').replace(f'[{keyword}]', '')
+                base_title = base_title.replace(f' {keyword}', '').replace(f'{keyword} ', '')
+                base_title = base_title.replace(keyword, '')
             
             # Clean up extra spaces and punctuation
             base_title = ' '.join(base_title.split())  # Remove extra whitespace
-            base_title = base_title.strip('()[]- ')
+            base_title = base_title.strip('()[]- ,.')
             
-            # Look for the base version in the album list
+            # First check local albums (albums you already have) - this is the primary check
+            if local_albums:
+                for local_album in local_albums:
+                    local_title = local_album if isinstance(local_album, str) else str(local_album)
+                    local_lower = local_title.lower().strip()
+                    
+                    # If we find a similar title in local albums without duplicate keywords
+                    if (base_title and len(base_title) > 2 and 
+                        (base_title in local_lower or local_lower in base_title) and 
+                        not any(keyword in local_lower for keyword in duplicate_keywords)):
+                        logger.debug(f"DUPLICATE_FILTER: Found duplicate - '{album_title}' (base: '{base_title}') matches local album '{local_title}'")
+                        return True  # This is a duplicate - you already have the normal version
+            
+            # Also check in the missing albums list (secondary check)
             for other_album in all_albums:
                 other_title = other_album.get('title', '') if isinstance(other_album, dict) else str(other_album)
                 other_lower = other_title.lower().strip()
@@ -3074,8 +3500,16 @@ class LibraryScannerWidget(QWidget):
             return True
             
         return False
-        
-        return False
+    
+    def _parse_album_data(self, album_data, fallback_artist_name):
+        """Parse album data handling both Deezer and local formats."""
+        if isinstance(album_data, dict):
+            # Handle both Deezer format ('title', 'artist') and local format ('album', 'album_artist')
+            album_title = album_data.get('title') or album_data.get('album', 'Unknown Album')
+            album_artist = album_data.get('artist') or album_data.get('album_artist', fallback_artist_name)
+            return album_title, album_artist
+        else:
+            return str(album_data), fallback_artist_name
     
     def on_artist_selected(self, item, column):
         """Handle artist selection."""
@@ -3098,14 +3532,8 @@ class LibraryScannerWidget(QWidget):
             is_artist_checked = item.checkState(0) == Qt.CheckState.Checked
             
             for album_data in missing_albums:
-                if isinstance(album_data, dict):
-                    album_title = album_data.get('title', 'Unknown Album')
-                    album_artist = album_data.get('artist', artist_name)
-                    album_type = self.get_album_type(album_title)
-                else:
-                    album_title = str(album_data)
-                    album_artist = artist_name
-                    album_type = self.get_album_type(album_title)
+                album_title, album_artist = self._parse_album_data(album_data, artist_name)
+                album_type = self.get_album_type(album_title)
                 
                 # Special handling for self-titled albums (like "311" by 311)
                 is_self_titled = self.is_self_titled_album(album_title, artist_name)
@@ -3331,6 +3759,29 @@ class LibraryScannerWidget(QWidget):
         # Check if we have any scan data loaded (either file mtimes or local albums)
         has_scan_data = bool(previous_mtimes) or bool(self.local_albums)
         
+        # Additional check: if scan_results.json exists but we couldn't parse it properly
+        if not has_scan_data and scan_results_path.exists():
+            logger.warning("scan_results.json exists but couldn't extract scan data properly")
+            # Try to force-load the scan data
+            try:
+                with open(scan_results_path, 'r', encoding='utf-8') as f:
+                    scan_data = json.load(f)
+                
+                # If we have any data structure, consider it valid scan data
+                if scan_data and (scan_data.get('files') or scan_data.get('albums') or scan_data.get('tracks')):
+                    has_scan_data = True
+                    logger.info("Found valid scan data structure in scan_results.json")
+                    
+                    # Create dummy mtimes based on current time for incremental scan
+                    import time
+                    current_time = time.time()
+                    for path in library_paths:
+                        previous_mtimes[path] = current_time - 86400  # 1 day ago
+                    
+                    logger.info(f"Created dummy mtimes for {len(previous_mtimes)} library paths")
+            except Exception as e:
+                logger.error(f"Error force-loading scan data: {e}")
+        
         if not has_scan_data:
             # No previous data at all, suggest full scan
             reply = QMessageBox.question(self, "No Previous Scan", 
@@ -3351,6 +3802,25 @@ class LibraryScannerWidget(QWidget):
                 file_mtime = file_data.get('modified', 0)
                 if file_path and file_mtime:
                     previous_mtimes[file_path] = file_mtime
+            
+            # If we still don't have mtimes, create them based on current folder times
+            if not previous_mtimes:
+                logger.info("No file mtimes found, creating from current folder modification times")
+                import time
+                current_time = time.time()
+                
+                for lib_path in library_paths:
+                    try:
+                        path = Path(lib_path)
+                        if path.exists():
+                            # Use the folder's actual modification time
+                            folder_mtime = path.stat().st_mtime
+                            previous_mtimes[str(path)] = folder_mtime
+                            logger.debug(f"Added mtime for {lib_path}: {folder_mtime}")
+                    except Exception as e:
+                        logger.warning(f"Could not get mtime for {lib_path}: {e}")
+                        # Fallback to current time minus 1 day
+                        previous_mtimes[str(path)] = current_time - 86400
             
             # Save the extracted mtimes for future use
             if previous_mtimes:
@@ -3490,20 +3960,31 @@ class LibraryScannerWidget(QWidget):
             
             # Save scan results in album format (compatible with library scanner)
             scan_results_path = appdata_path / "scan_results.json"
+            library_paths = self.config.get_setting('library_scanner.library_paths', [])
+            
+            # Debug logging
+            logger.info(f"Saving scan results: {len(results.get('scanned_files', []))} albums")
+            logger.info(f"Results keys: {list(results.keys())}")
+            
             with open(scan_results_path, 'w', encoding='utf-8') as f:
                 json.dump({
                     'scan_timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
                     'scan_time': results['scan_time'],
                     'scan_type': results['scan_type'],
-                    'library_paths': self.library_paths,
+                    'library_paths': library_paths,
                     'albums': results['scanned_files'],  # Now contains album data, not file data
                     'album_count': len(results['scanned_files'])
                 }, f, indent=2, ensure_ascii=False)
             
             logger.info(f"Saved {len(results['scanned_files'])} albums to {scan_results_path}")
             
+            # Also save folder modification times for future incremental scans
+            self.save_current_folder_mtimes()
+            
         except Exception as e:
             logger.error(f"Error saving scan results: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
     
     def cancel_scan(self):
         """Cancel the current scan."""
@@ -3660,14 +4141,8 @@ class LibraryScannerWidget(QWidget):
             is_artist_checked = item.checkState(0) == Qt.CheckState.Checked
             
             for album_data in missing_albums:
-                if isinstance(album_data, dict):
-                    album_title = album_data.get('title', 'Unknown Album')
-                    album_artist = album_data.get('artist', artist_name)
-                    album_type = self.get_album_type(album_title)
-                else:
-                    album_title = str(album_data)
-                    album_artist = artist_name
-                    album_type = self.get_album_type(album_title)
+                album_title, album_artist = self._parse_album_data(album_data, artist_name)
+                album_type = self.get_album_type(album_title)
                 
                 # Special handling for self-titled albums (like "311" by 311)
                 is_self_titled = self.is_self_titled_album(album_title, artist_name)

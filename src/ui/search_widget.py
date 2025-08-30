@@ -13,10 +13,12 @@ import asyncio
 # import aiohttp 
 # Import requests for synchronous HTTP calls in worker
 import requests 
+import concurrent.futures
 from io import BytesIO
 # Use absolute imports
 from src.services.deezer_api import DeezerAPI
-from src.services.download_manager import DownloadManager
+# Legacy download manager moved to backup
+# from src.services.download_manager import DownloadManager
 from src.services.spotify_api import SpotifyAPI
 from src.services.playlist_converter import PlaylistConverter
 from src.utils.image_cache_optimized import OptimizedImageCache
@@ -133,6 +135,16 @@ class SearchWorker(QRunnable):
         self.filter_name = filter_name # Empty string for "all", "tracks", "albums" etc. for specific
         self.limit = limit # This limit is 60 for "all", 20 for specific, used as total for "all" or single for specific
         self.signals = WorkerSignals()
+        # Create a session for this worker to reuse connections
+        self.session = requests.Session()
+        # Configure session for better performance
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=20,
+            max_retries=2
+        )
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
 
     @pyqtSlot()
     def run(self):
@@ -150,70 +162,48 @@ class SearchWorker(QRunnable):
                 track_limit = 20
                 playlist_limit = 10
 
-                # 1. General Search (for top diverse results)
-                try:
-                    general_url = f"https://api.deezer.com/search?q={self.query}&limit={general_limit}&order=RANKING"
-                    logger.debug(f"SearchWorker (all): Requesting General URL: {general_url}")
-                    response = requests.get(general_url, timeout=10)
-                    response.raise_for_status()
-                    data = response.json()
-                    results_payload['all_results'] = data.get('data', [])
-                    logger.debug(f"SearchWorker (all): General search returned {len(results_payload['all_results'])} items.")
-                except Exception as e:
-                    logger.error(f"SearchWorker (all): Error fetching general results: {e}", exc_info=True)
-                    results_payload['all_results'] = []
-
-                # 2. Artist Search
-                try:
-                    artist_url = f"https://api.deezer.com/search/artist?q={self.query}&limit={artist_limit}"
-                    logger.debug(f"SearchWorker (all): Requesting Artist URL: {artist_url}")
-                    response = requests.get(artist_url, timeout=10)
-                    response.raise_for_status()
-                    data = response.json()
-                    results_payload['artist_results'] = data.get('data', [])
-                    logger.debug(f"SearchWorker (all): Artist search returned {len(results_payload['artist_results'])} items.")
-                except Exception as e:
-                    logger.error(f"SearchWorker (all): Error fetching artist results: {e}", exc_info=True)
-                    results_payload['artist_results'] = []
-
-                # 3. Album Search
-                try:
-                    album_url = f"https://api.deezer.com/search/album?q={self.query}&limit={album_limit}"
-                    logger.debug(f"SearchWorker (all): Requesting Album URL: {album_url}")
-                    response = requests.get(album_url, timeout=10)
-                    response.raise_for_status()
-                    data = response.json()
-                    results_payload['album_results'] = data.get('data', [])
-                    logger.debug(f"SearchWorker (all): Album search returned {len(results_payload['album_results'])} items.")
-                except Exception as e:
-                    logger.error(f"SearchWorker (all): Error fetching album results: {e}", exc_info=True)
-                    results_payload['album_results'] = []
+                # Use concurrent requests for better performance
+                import concurrent.futures
+                import threading
                 
-                # 4. Track Search
-                try:
-                    track_url = f"https://api.deezer.com/search/track?q={self.query}&limit={track_limit}"
-                    logger.debug(f"SearchWorker (all): Requesting Track URL: {track_url}")
-                    response = requests.get(track_url, timeout=10)
-                    response.raise_for_status()
-                    data = response.json()
-                    results_payload['track_results'] = data.get('data', [])
-                    logger.debug(f"SearchWorker (all): Track search returned {len(results_payload['track_results'])} items.")
-                except Exception as e:
-                    logger.error(f"SearchWorker (all): Error fetching track results: {e}", exc_info=True)
-                    results_payload['track_results'] = []
+                def fetch_search_results(search_type, url, result_key):
+                    """Helper function to fetch search results."""
+                    try:
+                        logger.debug(f"SearchWorker (all): Requesting {search_type} URL: {url}")
+                        response = self.session.get(url, timeout=5)  # Reduced timeout from 10 to 5 seconds
+                        response.raise_for_status()
+                        data = response.json()
+                        results = data.get('data', [])
+                        logger.debug(f"SearchWorker (all): {search_type} search returned {len(results)} items.")
+                        return result_key, results
+                    except Exception as e:
+                        logger.error(f"SearchWorker (all): Error fetching {search_type} results: {e}")
+                        return result_key, []
 
-                # 5. Playlist Search
-                try:
-                    playlist_url = f"https://api.deezer.com/search/playlist?q={self.query}&limit={playlist_limit}"
-                    logger.debug(f"SearchWorker (all): Requesting Playlist URL: {playlist_url}")
-                    response = requests.get(playlist_url, timeout=10)
-                    response.raise_for_status()
-                    data = response.json()
-                    results_payload['playlist_results'] = data.get('data', [])
-                    logger.debug(f"SearchWorker (all): Playlist search returned {len(results_payload['playlist_results'])} items.")
-                except Exception as e:
-                    logger.error(f"SearchWorker (all): Error fetching playlist results: {e}", exc_info=True)
-                    results_payload['playlist_results'] = []
+                # Prepare all search requests
+                search_requests = [
+                    ("General", f"https://api.deezer.com/search?q={self.query}&limit={general_limit}&order=RANKING", 'all_results'),
+                    ("Artist", f"https://api.deezer.com/search/artist?q={self.query}&limit={artist_limit}", 'artist_results'),
+                    ("Album", f"https://api.deezer.com/search/album?q={self.query}&limit={album_limit}", 'album_results'),
+                    ("Track", f"https://api.deezer.com/search/track?q={self.query}&limit={track_limit}", 'track_results'),
+                    ("Playlist", f"https://api.deezer.com/search/playlist?q={self.query}&limit={playlist_limit}", 'playlist_results')
+                ]
+
+                # Execute all requests concurrently with a maximum of 3 concurrent requests
+                with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                    future_to_search = {
+                        executor.submit(fetch_search_results, search_type, url, result_key): (search_type, result_key)
+                        for search_type, url, result_key in search_requests
+                    }
+                    
+                    for future in concurrent.futures.as_completed(future_to_search, timeout=15):  # 15 second total timeout
+                        try:
+                            result_key, results = future.result()
+                            results_payload[result_key] = results
+                        except Exception as e:
+                            search_type, result_key = future_to_search[future]
+                            logger.error(f"SearchWorker (all): {search_type} search failed: {e}")
+                            results_payload[result_key] = []
                 
                 self.signals.finished.emit(results_payload)
 
@@ -240,7 +230,7 @@ class SearchWorker(QRunnable):
                 endpoint_url = f"https://api.deezer.com/search{api_filter_type}?q={self.query}&limit={self.limit}"
                 logger.debug(f"SearchWorker (specific filter '{self.filter_name}'): Requesting URL: {endpoint_url}")
             
-                response = requests.get(endpoint_url, timeout=10)
+                response = self.session.get(endpoint_url, timeout=5)  # Reduced timeout from 10 to 5 seconds
                 response.raise_for_status()
                 data = response.json() 
             
@@ -262,6 +252,10 @@ class SearchWorker(QRunnable):
             error_msg = f"SearchWorker failed: {str(e)}"
             logger.error(error_msg, exc_info=True)
             self.signals.error.emit(error_msg)
+        finally:
+            # Clean up the session
+            if hasattr(self, 'session'):
+                self.session.close()
 
 class SearchResultCard(QFrame):
     """Card widget for displaying search results."""
@@ -302,9 +296,9 @@ class SearchResultCard(QFrame):
         # Add to class-level tracking
         SearchResultCard._all_cards.append(self)
         
-        # Connect the signals
-        self.artwork_loaded_signal.connect(self.set_artwork)
-        self.artwork_error_signal.connect(self.handle_artwork_error)
+        # Connect the signals with Qt.QueuedConnection for thread safety
+        self.artwork_loaded_signal.connect(self.set_artwork, Qt.ConnectionType.QueuedConnection)
+        self.artwork_error_signal.connect(self.handle_artwork_error, Qt.ConnectionType.QueuedConnection)
         
         # Setup UI components
         self.setup_ui()
@@ -316,6 +310,13 @@ class SearchResultCard(QFrame):
         """Clean up the card and cancel any ongoing operations."""
         # Cancel artwork loading
         self.cancel_artwork_load()
+        
+        # Disconnect signals to prevent any remaining signal emissions
+        try:
+            self.artwork_loaded_signal.disconnect()
+            self.artwork_error_signal.disconnect()
+        except Exception:
+            pass  # Signals may already be disconnected
         
         # Remove from class tracking
         try:
@@ -422,7 +423,9 @@ class SearchResultCard(QFrame):
             self.artwork_label.setFixedSize(self.ARTIST_CARD_WIDTH, self.ARTIST_CARD_WIDTH)
             self.text_info_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter) 
             title_text = self.item_data.get('name', 'Unknown Artist')
-            self.is_top_artist_result = True 
+            self.is_top_artist_result = True
+            # Set a default background for artist cards to ensure visibility
+            self.artwork_label.setStyleSheet("background-color: #f5f5f5; border-radius: 75px; border: 2px solid #ddd;") 
             
         elif item_type == 'album':
             title_text = self.item_data.get('title', 'Unknown Album')
@@ -563,16 +566,44 @@ class SearchResultCard(QFrame):
     class _CardArtworkLoader(QRunnable):
         """Worker class to load artwork asynchronously."""
 
-        def __init__(self, url, loaded_signal, error_signal):
+        def __init__(self, url, loaded_signal, error_signal, card_ref=None):
             super().__init__()
             self.url = url
             self.loaded_signal = loaded_signal
             self.error_signal = error_signal
+            self.card_ref = card_ref  # Weak reference to the card
             self._is_cancelled = False
 
         def cancel(self):
             """Cancel the loading operation."""
             self._is_cancelled = True
+
+        def _safe_emit_signal(self, signal, *args):
+            """Safely emit a signal, checking if the parent object still exists."""
+            if self._is_cancelled:
+                return False
+                
+            # Check if the card still exists
+            if self.card_ref and sip_is_deleted(self.card_ref):
+                logger.debug(f"[SearchResultCard._CardArtworkLoader] Card deleted, skipping signal emission for {self.url}")
+                return False
+                
+            try:
+                if hasattr(signal, 'emit'):
+                    signal.emit(*args)
+                    return True
+                else:
+                    logger.debug(f"[SearchResultCard._CardArtworkLoader] Signal object does not have emit method")
+                    return False
+            except RuntimeError as e:
+                if "wrapped C/C++ object" in str(e) or "has been deleted" in str(e):
+                    logger.debug(f"[SearchResultCard._CardArtworkLoader] Card object deleted during signal emission: {e}")
+                else:
+                    logger.error(f"[SearchResultCard._CardArtworkLoader] RuntimeError emitting signal: {e}")
+                return False
+            except Exception as e:
+                logger.error(f"[SearchResultCard._CardArtworkLoader] Error emitting signal: {e}")
+                return False
 
         @pyqtSlot()
         def run(self):
@@ -587,15 +618,14 @@ class SearchResultCard(QFrame):
                     # Try to get pixmap directly from cache (includes memory cache)
                     cached_pixmap = get_pixmap_from_cache(self.url)
                     if cached_pixmap and not cached_pixmap.isNull() and not self._is_cancelled:
-                        if hasattr(self.loaded_signal, 'emit'):
-                            self.loaded_signal.emit(cached_pixmap)
+                        self._safe_emit_signal(self.loaded_signal, cached_pixmap)
                         return
                 except Exception as cache_err:
                     logger.debug(f"[SearchResultCard._CardArtworkLoader] Cache check failed: {cache_err}")
                     # Continue to download if cache check fails
 
                 # If not in cache or invalid, download it
-                response = requests.get(self.url, timeout=10)
+                response = requests.get(self.url, timeout=3)  # Reduced timeout for artwork from 10 to 3 seconds
                 if self._is_cancelled:
                     return
                 response.raise_for_status()
@@ -618,40 +648,30 @@ class SearchResultCard(QFrame):
                         return
                     pixmap = QPixmap.fromImage(image)
                     if not pixmap.isNull():
-                        if hasattr(self.loaded_signal, 'emit'):
-                            self.loaded_signal.emit(pixmap)
-                        else:
-                            logger.error(f"[SearchResultCard._CardArtworkLoader] Signal object does not have emit method")
+                        self._safe_emit_signal(self.loaded_signal, pixmap)
                     else:
-                        if hasattr(self.error_signal, 'emit'):
-                            self.error_signal.emit("Generated pixmap is null")
-                        else:
-                            logger.error(f"[SearchResultCard._CardArtworkLoader] Error signal object does not have emit method")
+                        self._safe_emit_signal(self.error_signal, "Generated pixmap is null")
                 else:
-                    if hasattr(self.error_signal, 'emit'):
-                        self.error_signal.emit("Failed to load image data")
-                    else:
-                        logger.error(f"[SearchResultCard._CardArtworkLoader] Error signal object does not have emit method")
+                    self._safe_emit_signal(self.error_signal, "Failed to load image data")
 
             except requests.exceptions.Timeout:
-                logger.error(f"[SearchResultCard._CardArtworkLoader] Timeout loading image {self.url}")
-                if not self._is_cancelled and hasattr(self.error_signal, 'emit'):
-                    self.error_signal.emit("Request timed out")
+                logger.debug(f"[SearchResultCard._CardArtworkLoader] Timeout loading image {self.url}")
+                self._safe_emit_signal(self.error_signal, "Request timed out")
             except requests.exceptions.RequestException as e:
-                logger.error(f"[SearchResultCard._CardArtworkLoader] Request error loading image {self.url}: {e}")
-                if not self._is_cancelled and hasattr(self.error_signal, 'emit'):
-                    self.error_signal.emit(str(e))
+                logger.debug(f"[SearchResultCard._CardArtworkLoader] Request error loading image {self.url}: {e}")
+                self._safe_emit_signal(self.error_signal, str(e))
             except Exception as e:
                 logger.error(f"[SearchResultCard._CardArtworkLoader] Error loading image {self.url}: {e}")
-                if not self._is_cancelled and hasattr(self.error_signal, 'emit'):
-                    try:
-                        self.error_signal.emit(str(e))
-                    except Exception as emit_error:
-                        logger.error(f"[SearchResultCard._CardArtworkLoader] Failed to emit error signal: {emit_error}")
+                self._safe_emit_signal(self.error_signal, str(e))
 
     def load_artwork(self):
         # Don't load if already loaded or loading
         if self._artwork_loaded or self._current_artwork_loader:
+            return
+            
+        # Check if the card is still valid
+        if sip_is_deleted(self) or not hasattr(self, 'artwork_label') or sip_is_deleted(self.artwork_label):
+            logger.debug(f"[SearchResultCard] Card or artwork_label deleted, skipping artwork load")
             return
             
         # Cancel any existing loader first
@@ -799,7 +819,8 @@ class SearchResultCard(QFrame):
         self._current_artwork_loader = self._CardArtworkLoader(
             url, 
             self.artwork_loaded_signal,  # Pass the class signal
-            self.artwork_error_signal    # Pass the class signal
+            self.artwork_error_signal,   # Pass the class signal
+            self                         # Pass reference to the card for lifecycle checking
         )
         
         # Start the loader
@@ -884,7 +905,8 @@ class SearchResultCard(QFrame):
             self._current_artwork_loader = self._CardArtworkLoader(
                 next_url,
                 self.artwork_loaded_signal,
-                self.artwork_error_signal
+                self.artwork_error_signal,
+                self  # Pass reference to the card for lifecycle checking
             )
             
             # Start the loader
@@ -1102,10 +1124,10 @@ class SearchWidget(QWidget):
     album_name_clicked_from_track = pyqtSignal(int)   # Emits album_id when album name clicked in track
     back_button_pressed = pyqtSignal() # ADDED: Signal for back button
     
-    def __init__(self, deezer_api: DeezerAPI, download_manager: DownloadManager, config_manager, parent=None):
+    def __init__(self, deezer_api: DeezerAPI, download_service=None, config_manager=None, parent=None):
         super().__init__(parent)
         self._deezer_api = deezer_api  # Use private attribute for property
-        self.download_manager = download_manager
+        self.download_service = download_service
         self.current_query = ""
         self.active_filter_type = "all" # Default to 'all'
         self.filter_buttons = {} # To store filter buttons for styling
@@ -1566,41 +1588,75 @@ class SearchWidget(QWidget):
         
         self._clear_results()
         
-        # Create header with playlist info
+        # Create header with playlist info - styled like other DeeMusic sections
         header_widget = QWidget()
+        header_widget.setObjectName("PlaylistConversionHeader")
         header_layout = QVBoxLayout(header_widget)
-        header_layout.setContentsMargins(20, 20, 20, 10)
-        header_layout.setSpacing(10)
+        header_layout.setContentsMargins(15, 15, 15, 10)
+        header_layout.setSpacing(8)
         
-        # Playlist title
+        # Playlist title - use consistent styling
         playlist_title = QLabel(f"Converted: {playlist_info.get('name', 'Spotify Playlist')}")
-        playlist_title.setObjectName("SearchSectionHeader")
+        playlist_title.setObjectName("PlaylistConversionTitle")
         playlist_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        playlist_title.setStyleSheet("""
+            QLabel#PlaylistConversionTitle {
+                font-size: 18px;
+                font-weight: bold;
+                color: #333;
+                margin-bottom: 5px;
+            }
+        """)
         header_layout.addWidget(playlist_title)
         
-        # Conversion stats
+        # Conversion stats - styled consistently
         success_rate = (successful_matches / total_tracks * 100) if total_tracks > 0 else 0
         stats_text = f"Found {successful_matches} of {total_tracks} tracks on Deezer ({success_rate:.1f}% match rate)"
         if failed_matches > 0:
             stats_text += f" • {failed_matches} tracks not found"
         
         stats_label = QLabel(stats_text)
+        stats_label.setObjectName("PlaylistConversionStats")
         stats_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        stats_label.setStyleSheet("color: #666; font-size: 12px;")
+        stats_label.setStyleSheet("""
+            QLabel#PlaylistConversionStats {
+                color: #666;
+                font-size: 13px;
+                margin-top: 5px;
+                margin-bottom: 10px;
+            }
+        """)
         header_layout.addWidget(stats_label)
         
-        # Add Download All button if there are successful matches
+        # Add Download All button if there are successful matches - styled like DeeMusic buttons
         if successful_matches > 0:
             download_all_container = QWidget()
             download_all_layout = QHBoxLayout(download_all_container)
-            download_all_layout.setContentsMargins(0, 10, 0, 0)
+            download_all_layout.setContentsMargins(0, 15, 0, 10)
             download_all_layout.setSpacing(0)
             
             download_all_button = QPushButton("Download All")
-            download_all_button.setObjectName("ArtistDownloadButton")
+            download_all_button.setObjectName("PlaylistDownloadAllButton")
             download_all_button.setCursor(Qt.CursorShape.PointingHandCursor)
-            download_all_button.setFixedHeight(28)
-            download_all_button.setMinimumWidth(140)
+            download_all_button.setFixedHeight(32)
+            download_all_button.setMinimumWidth(150)
+            download_all_button.setStyleSheet("""
+                QPushButton#PlaylistDownloadAllButton {
+                    background-color: #8B5CF6;
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    font-weight: bold;
+                    font-size: 13px;
+                    padding: 8px 16px;
+                }
+                QPushButton#PlaylistDownloadAllButton:hover {
+                    background-color: #7C3AED;
+                }
+                QPushButton#PlaylistDownloadAllButton:pressed {
+                    background-color: #6D28D9;
+                }
+            """)
             
             # Store conversion results for the download handler
             download_all_button.clicked.connect(lambda: self._download_all_converted_tracks(conversion_results))
@@ -1613,18 +1669,100 @@ class SearchWidget(QWidget):
         
         self.results_layout.addWidget(header_widget)
         
-        # Format and display tracks
+        # Format and display tracks with proper DeeMusic styling
         formatted_tracks = self.playlist_converter.format_for_display(conversion_results)
         
         if formatted_tracks:
-            # Add track list section with all converted tracks
-            self._add_converted_track_list_section(formatted_tracks)
+            # Create a styled container for the track list
+            tracks_container = QWidget()
+            tracks_container.setObjectName("ConvertedTracksContainer")
+            tracks_container.setStyleSheet("""
+                QWidget#ConvertedTracksContainer {
+                    background-color: transparent;
+                    border: none;
+                    margin-top: 10px;
+                }
+            """)
+            tracks_layout = QVBoxLayout(tracks_container)
+            tracks_layout.setContentsMargins(0, 0, 0, 0)
+            tracks_layout.setSpacing(0)
+            
+            # Add the track list to the styled container
+            self._add_converted_track_list_section_to_container(formatted_tracks, tracks_layout)
+            
+            self.results_layout.addWidget(tracks_container)
         else:
             no_tracks_label = QLabel("No tracks could be converted from this playlist.")
             no_tracks_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            no_tracks_label.setStyleSheet("color: #666; font-size: 14px; margin: 20px;")
             self.results_layout.addWidget(no_tracks_label)
         
         self.results_layout.addStretch()
+    
+    def _add_converted_track_list_section_to_container(self, tracks: list, container_layout):
+        """Add converted track list to a specific container layout."""
+        if not tracks:
+            return
+        
+        # Store tracks data for sorting
+        self.current_tracks_data = tracks
+        
+        # Add track list header with proper styling
+        track_header = TrackListHeaderWidget(show_track_numbers=True)
+        track_header.sort_requested.connect(self._handle_track_sort)
+        track_header.setStyleSheet("""
+            QWidget#TrackListHeader {
+                background-color: rgba(0, 0, 0, 0.05);
+                border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+                margin-bottom: 2px;
+            }
+        """)
+        container_layout.addWidget(track_header)
+        
+        # Create track list container for sorting updates
+        track_list_widget = QWidget()
+        track_list_layout = QVBoxLayout(track_list_widget)
+        track_list_layout.setContentsMargins(0, 0, 0, 0)
+        track_list_layout.setSpacing(1)  # Small spacing between track cards
+        
+        # Store reference for sorting updates
+        self.current_track_list_container = track_list_widget
+        
+        # Add tracks with proper styling
+        for i, track_data in enumerate(tracks):
+            # Create track card with proper styling
+            card = SearchResultCard(track_data, show_duration=True, track_position=i+1)
+            
+            # Add match score styling
+            if not track_data.get('match_failed', False):
+                match_score = track_data.get('match_score', 0)
+                if match_score >= 90:
+                    card.setToolTip(f"Excellent match ({match_score:.0f}%)")
+                elif match_score >= 70:
+                    card.setToolTip(f"Good match ({match_score:.0f}%)")
+                elif match_score >= 50:
+                    card.setToolTip(f"Fair match ({match_score:.0f}%)")
+                else:
+                    card.setToolTip(f"Weak match ({match_score:.0f}%)")
+            else:
+                card.setToolTip("No match found on Deezer")
+                # Style failed matches with subtle red background
+                card.setStyleSheet("""
+                    QFrame {
+                        background-color: rgba(255, 0, 0, 0.08);
+                        border-left: 3px solid #ff6b6b;
+                    }
+                """)
+            
+            # Connect signals
+            card.card_selected.connect(self._handle_card_selection)
+            card.download_clicked.connect(self._handle_card_download_request)
+            card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
+            card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
+            
+            track_list_layout.addWidget(card)
+        
+        container_layout.addWidget(track_list_widget)
     
     def _add_converted_track_list_section(self, tracks: list):
         """Add a track list section specifically for converted Spotify tracks."""
@@ -1641,7 +1779,8 @@ class SearchWidget(QWidget):
         container_layout.setSpacing(0)
         
         # Add track list header
-        track_header = self._create_track_list_header()
+        track_header = TrackListHeaderWidget(show_track_numbers=True)
+        track_header.sort_requested.connect(self._handle_track_sort)
         container_layout.addWidget(track_header)
         
         # Store reference to the container for sorting updates
@@ -1671,7 +1810,7 @@ class SearchWidget(QWidget):
             # Connect signals
             card.card_selected.connect(self._handle_card_selection)
             card.download_clicked.connect(self._handle_card_download_request)
-            logger.info(f"[SearchWidget] Connected download signal for card: {item_data.get('title', item_data.get('name', 'Unknown'))}")
+            logger.info(f"[SearchWidget] Connected download signal for card: {track_data.get('title', track_data.get('name', 'Unknown'))}")
             
             # Test the connection by checking if the handler method exists
             if hasattr(self, '_handle_card_download_request'):
@@ -1684,6 +1823,76 @@ class SearchWidget(QWidget):
             container_layout.addWidget(card)
         
         self.results_layout.addWidget(track_list_container)
+    
+    def _handle_track_sort(self, column_name: str, ascending: bool):
+        """Handle sorting of tracks in the converted playlist."""
+        if not hasattr(self, 'current_tracks_data') or not self.current_tracks_data:
+            return
+        
+        # Sort the tracks data
+        if column_name == "title":
+            self.current_tracks_data.sort(
+                key=lambda x: x.get('title', '').lower(),
+                reverse=not ascending
+            )
+        elif column_name == "artist":
+            self.current_tracks_data.sort(
+                key=lambda x: x.get('artist', {}).get('name', '').lower(),
+                reverse=not ascending
+            )
+        elif column_name == "album":
+            self.current_tracks_data.sort(
+                key=lambda x: x.get('album', {}).get('title', '').lower(),
+                reverse=not ascending
+            )
+        elif column_name == "duration":
+            self.current_tracks_data.sort(
+                key=lambda x: x.get('duration', 0),
+                reverse=not ascending
+            )
+        
+        # Rebuild the track list with sorted data
+        if hasattr(self, 'current_track_list_container') and self.current_track_list_container:
+            # Clear existing track cards
+            layout = self.current_track_list_container.layout()
+            if layout:
+                # Remove all existing track cards
+                while layout.count() > 0:
+                    child = layout.takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+                
+                # Add sorted tracks with proper styling
+                for i, track_data in enumerate(self.current_tracks_data):
+                    card = SearchResultCard(track_data, show_duration=True, track_position=i+1)
+                    
+                    # Add match score styling
+                    if not track_data.get('match_failed', False):
+                        match_score = track_data.get('match_score', 0)
+                        if match_score >= 90:
+                            card.setToolTip(f"Excellent match ({match_score:.0f}%)")
+                        elif match_score >= 70:
+                            card.setToolTip(f"Good match ({match_score:.0f}%)")
+                        elif match_score >= 50:
+                            card.setToolTip(f"Fair match ({match_score:.0f}%)")
+                        else:
+                            card.setToolTip(f"Weak match ({match_score:.0f}%)")
+                    else:
+                        card.setToolTip("No match found on Deezer")
+                        card.setStyleSheet("""
+                            QFrame {
+                                background-color: rgba(255, 0, 0, 0.08);
+                                border-left: 3px solid #ff6b6b;
+                            }
+                        """)
+                    
+                    # Connect signals
+                    card.card_selected.connect(self._handle_card_selection)
+                    card.download_clicked.connect(self._handle_card_download_request)
+                    card.artist_name_clicked.connect(self.artist_name_clicked_from_track.emit)
+                    card.album_name_clicked.connect(self.album_name_clicked_from_track.emit)
+                    
+                    layout.addWidget(card)
     
     def _download_all_converted_tracks(self, conversion_results: dict):
         """Download all successfully converted tracks from a Spotify playlist as a playlist."""
@@ -1710,14 +1919,21 @@ class SearchWidget(QWidget):
             
             total_tracks = len(successful_tracks)
             
-            # Emit group download signal to show in download queue UI
-            self.download_manager.signals.group_download_enqueued.emit({
-                'group_id': str(fake_playlist_id),
-                'group_title': playlist_name,
-                'item_type': 'playlist',
-                'total_tracks': total_tracks,
-                'cover_url': None  # Spotify playlists don't have covers in our conversion
-            })
+            # Note: Group download signals not needed with new DownloadService
+            # The new system handles playlist downloads automatically
+            logger.info(f"Adding playlist '{playlist_name}' to download queue")
+            
+            # Create playlist data for the download service
+            playlist_data = {
+                'id': fake_playlist_id,
+                'title': playlist_name,
+                'nb_tracks': total_tracks,
+                'tracks': {'data': successful_tracks}
+            }
+            
+            # Add the playlist to the download service
+            if self.download_service:
+                self.download_service.add_playlist(playlist_data)
             
             logger.info(f"Starting playlist download for converted Spotify playlist: '{playlist_name}' with {total_tracks} tracks")
             
@@ -1734,15 +1950,9 @@ class SearchWidget(QWidget):
                     
                     logger.debug(f"Queuing playlist track {playlist_position}/{total_tracks}: {track_data.get('title', 'Unknown')} by {track_data.get('artist', {}).get('name', 'Unknown')}")
                     
-                    # Use playlist_track item type to follow playlist folder structure and naming
-                    self.download_manager._queue_individual_track_download(
-                        track_id=track_id,
-                        item_type='playlist_track',
-                        playlist_id=fake_playlist_id,
-                        playlist_title=playlist_name,
-                        track_details=track_details,
-                        playlist_total_tracks=total_tracks
-                    )
+                    # Note: Individual track queueing not needed with new DownloadService
+                    # The new system handles playlist tracks automatically when adding the playlist
+                    logger.debug(f"Track {track_id} will be handled by playlist download")
                     
                 except Exception as e:
                     logger.error(f"Failed to queue track {track_data.get('title', 'Unknown')}: {e}")
@@ -2461,16 +2671,16 @@ class SearchWidget(QWidget):
 
         try:
             if item_type == 'track':
-                self.download_manager.download_track(item_id)
+                self.download_service.add_track(item_data)
             elif item_type == 'album':
-                # Use async download_album method - it will fetch album details internally
-                logger.info(f"Queueing album download for ID: {item_id}. Details will be fetched asynchronously.")
-                asyncio.create_task(self.download_manager.download_album(album_id=item_id, track_ids=[]))
+                # Use DownloadService to add album - it will fetch album details internally
+                logger.info(f"Adding album download for ID: {item_id}. Details will be fetched automatically.")
+                self.download_service.add_album(item_data)
             elif item_type == 'playlist':
-                # Use async download_playlist method - it will fetch playlist details internally
+                # Use DownloadService to add playlist - it will fetch playlist details internally
                 playlist_title = item_data.get('title', 'Unknown Playlist')
-                logger.info(f"Queueing playlist download for ID: {item_id}. Details will be fetched asynchronously.")
-                asyncio.create_task(self.download_manager.download_playlist(playlist_id=item_id, playlist_title=playlist_title, track_ids=[]))
+                logger.info(f"Adding playlist download for ID: {item_id}. Details will be fetched automatically.")
+                self.download_service.add_playlist(item_data)
             elif item_type == 'artist':
                 logger.info(f"Downloading all content for artist '{item_data.get('name')}' (ID: {item_id}). This will include albums, singles, and EPs.")
                 asyncio.create_task(self._download_artist_content(artist_id=item_id, artist_name=item_data.get('name')))
@@ -2567,11 +2777,11 @@ class SearchWidget(QWidget):
 
         logger.info(f"[SearchWidget] Download request received for: {item_title} (ID: {item_id}, Type: {item_type})")
         
-        if not self.download_manager:
-            logger.error("[SearchWidget] DownloadManager not available in SearchWidget.")
+        if not self.download_service:
+            logger.error("[SearchWidget] DownloadService not available in SearchWidget.")
             return
 
-        logger.info(f"[SearchWidget] DownloadManager available, processing download request for: {item_title}")
+        logger.info(f"[SearchWidget] DownloadService available, processing download request for: {item_title}")
 
         can_proceed = True
         if not item_id:
@@ -2582,19 +2792,27 @@ class SearchWidget(QWidget):
             return
 
         if item_type == 'track':
-            logger.debug(f"Calling DownloadManager._queue_individual_track_download for track ID: {item_id} with item_data: {item_data}")
-            self.download_manager._queue_individual_track_download(track_id=item_id, item_type='track', track_details=item_data)
-        elif item_type == 'album':
-            logger.info(f"Calling DownloadManager.download_album for album '{item_title}' (ID: {item_id}). Tracks will be fetched by DM.")
+            logger.debug(f"Calling DownloadService.add_track for track ID: {item_id} with item_data: {item_data}")
             try:
-                asyncio.create_task(self.download_manager.download_album(album_id=item_id, track_ids=[]))
-                logger.info(f"[SearchWidget] Successfully created download task for album {item_id}")
+                self.download_service.add_track(item_data)
+                logger.info(f"[SearchWidget] Successfully added track {item_id} to download queue")
             except Exception as e:
-                logger.error(f"[SearchWidget] Error creating download task for album {item_id}: {e}")
+                logger.error(f"[SearchWidget] Error adding track {item_id} to queue: {e}")
+        elif item_type == 'album':
+            logger.info(f"Calling DownloadService.add_album for album '{item_title}' (ID: {item_id}). Tracks will be fetched by DS.")
+            try:
+                self.download_service.add_album(item_data)
+                logger.info(f"[SearchWidget] Successfully added album {item_id} to download queue")
+            except Exception as e:
+                logger.error(f"[SearchWidget] Error adding album {item_id} to queue: {e}")
         elif item_type == 'playlist':
             playlist_specific_title = item_data.get('title', item_title)
-            logger.info(f"Calling DownloadManager.download_playlist for playlist '{playlist_specific_title}' (ID: {item_id}). Tracks will be fetched by DM.")
-            asyncio.create_task(self.download_manager.download_playlist(playlist_id=item_id, playlist_title=playlist_specific_title, track_ids=[]))
+            logger.info(f"Calling DownloadService.add_playlist for playlist '{playlist_specific_title}' (ID: {item_id}). Tracks will be fetched by DS.")
+            try:
+                self.download_service.add_playlist(item_data)
+                logger.info(f"[SearchWidget] Successfully added playlist {item_id} to download queue")
+            except Exception as e:
+                logger.error(f"[SearchWidget] Error adding playlist {item_id} to queue: {e}")
         elif item_type == 'artist':
             logger.warning(f"Downloading entire artist '{item_title}' (ID: {item_id}) is not directly supported. User should browse artist content.")
         else:
@@ -2643,8 +2861,9 @@ class SearchWidget(QWidget):
                 
                 if album_id:
                     logger.info(f"Downloading {album_type}: '{album_title}' (ID: {album_id}) by {artist_name}")
-                    # Use the existing download_album method which will fetch tracks automatically
-                    await self.download_manager.download_album(album_id=album_id, track_ids=[])
+                    # Use the DownloadService to add album which will fetch tracks automatically
+                    album_data = {'id': album_id, 'title': album_title, 'type': 'album'}
+                    self.download_service.add_album(album_data)
                 else:
                     logger.warning(f"Skipping album '{album_title}' - missing ID")
             

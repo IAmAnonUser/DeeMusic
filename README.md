@@ -23,7 +23,7 @@ A modern desktop application for downloading and managing music with an intuitiv
 - **Better Organization**: Albums now have properly numbered tracks for clean library organization
 
 ### Enhanced Queue Management
-- **New "Clear Pending" Button**: Dedicated button to clear stuck downloads from previous sessions
+- **Simplified UI**: Streamlined download queue interface with essential controls only
 - **Smart Detection**: Improved album completion detection prevents phantom downloads
 - **Better UI Sync**: Queue state properly synchronized between UI and storage
 

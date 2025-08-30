@@ -10,6 +10,7 @@ import time
 import tempfile
 import shutil
 import threading
+import signal
 from pathlib import Path
 from typing import Optional, Dict, Any
 from PyQt6.QtCore import QRunnable, QThreadPool
@@ -46,11 +47,10 @@ class TrackDownloadRunnable(QRunnable):
     Runnable for downloading individual tracks in parallel.
     """
     
-    def __init__(self, parent_worker, track_info, album_dir, playlist_position):
+    def __init__(self, parent_worker, track_info, playlist_position):
         super().__init__()
         self.parent_worker = parent_worker
         self.track_info = track_info
-        self.album_dir = album_dir
         self.playlist_position = playlist_position
         self.success = False
         
@@ -64,7 +64,6 @@ class TrackDownloadRunnable(QRunnable):
             # Download the track using parent worker's method
             self.success = self.parent_worker._download_track(
                 self.track_info, 
-                self.album_dir, 
                 playlist_position=self.playlist_position
             )
             
@@ -120,6 +119,9 @@ class DownloadWorker(QRunnable):
         
         # Performance optimization: cache compilation detection result
         self._is_compilation_cache = None
+        
+        # Cache album artwork for multi-disc distribution
+        self._cached_album_artwork = None
         
         logger.info(f"[DownloadWorker] Created worker for {self.item.item_type.value}: {self.item.title} by {self.item.artist}")
     
@@ -198,8 +200,29 @@ class DownloadWorker(QRunnable):
         self._failed_tracks = 0
         self._total_tracks = len(self.item.tracks)
         
+        # Ensure token freshness before starting concurrent downloads
+        # This helps prevent CSRF token expiration issues during batch operations
+        logger.info(f"[DownloadWorker] Ensuring token freshness before downloading {self._total_tracks} tracks...")
+        try:
+            logger.info(f"[DownloadWorker] About to call ensure_token_freshness_sync() on deezer_api...")
+            logger.info(f"[DownloadWorker] DeezerAPI instance has ARL: {bool(self.deezer_api.arl)}, ARL length: {len(self.deezer_api.arl) if self.deezer_api.arl else 0}")
+            logger.info(f"[DownloadWorker] DeezerAPI instance ARL preview: {self.deezer_api.arl[:20] if self.deezer_api.arl else None}...")
+            token_fresh = self.deezer_api.ensure_token_freshness_sync()
+            logger.info(f"[DownloadWorker] ensure_token_freshness_sync() returned: {token_fresh}")
+            if not token_fresh:
+                logger.error(f"[DownloadWorker] Failed to ensure token freshness, aborting album download")
+                return
+            logger.info(f"[DownloadWorker] Token freshness confirmed, proceeding with download")
+        except Exception as e:
+            logger.error(f"[DownloadWorker] Exception during token freshness check: {e}", exc_info=True)
+            logger.error(f"[DownloadWorker] Aborting album download due to token check failure")
+            return
+        
         # Create album directory
         album_dir = self._create_album_directory()
+        
+        # Download and cache album artwork for multi-disc distribution
+        self._prepare_album_artwork_for_multi_disc()
         
         # Create thread pool for concurrent track downloads
         self.track_thread_pool = QThreadPool()
@@ -227,12 +250,16 @@ class DownloadWorker(QRunnable):
                 track_worker = TrackDownloadRunnable(
                     parent_worker=self,
                     track_info=track_info,
-                    album_dir=album_dir,
                     playlist_position=i+1
                 )
                 
                 track_workers.append(track_worker)
                 self.track_thread_pool.start(track_worker)
+                
+                # Add small delay between starting workers to reduce API call clustering
+                # This helps prevent multiple workers from hitting expired tokens simultaneously
+                if i > 0 and i % 2 == 0:  # Every 2 tracks, pause briefly
+                    time.sleep(0.05)  # 50ms delay
             
             # Wait for all downloads to complete with real-time progress updates
             if not self.cancelled:
@@ -259,6 +286,16 @@ class DownloadWorker(QRunnable):
     
     def _download_playlist(self):
         """Download all tracks in a playlist."""
+        # Ensure token freshness before starting concurrent downloads
+        logger.info(f"[DownloadWorker] Ensuring token freshness before downloading playlist tracks...")
+        if not self.deezer_api.ensure_token_freshness_sync():
+            logger.error(f"[DownloadWorker] Failed to ensure token freshness, aborting playlist download")
+            return
+        logger.debug(f"[DownloadWorker] Token freshness confirmed for playlist, proceeding with download")
+        
+        # Download and cache album artwork for multi-disc distribution if needed
+        self._prepare_album_artwork_for_multi_disc()
+        
         # Similar to album download but with playlist-specific logic
         self._download_album()  # For now, use same logic as album
     
@@ -267,17 +304,15 @@ class DownloadWorker(QRunnable):
         if not self.item.tracks:
             raise ValueError("No track information available")
         
+        # Ensure token freshness before downloading
+        logger.debug(f"[DownloadWorker] Ensuring token freshness before downloading single track...")
+        if not self.deezer_api.ensure_token_freshness_sync():
+            logger.error(f"[DownloadWorker] Failed to ensure token freshness, aborting single track download")
+            raise Exception("Failed to ensure token freshness")
+
         track_info = self.item.tracks[0]
         
-        # Create directory for single track
-        if self.create_artist_folders:
-            track_dir = self.download_path / self._sanitize_filename(self.item.artist)
-        else:
-            track_dir = self.download_path
-        
-        track_dir.mkdir(parents=True, exist_ok=True)
-        
-        success = self._download_track(track_info, track_dir, playlist_position=1)
+        success = self._download_track(track_info, playlist_position=1)
         
         if success:
             self.event_bus.emit(DownloadEvents.TRACK_COMPLETED, self.item.id, track_info.track_id)
@@ -285,13 +320,12 @@ class DownloadWorker(QRunnable):
         else:
             raise Exception("Failed to download track")
     
-    def _download_track(self, track_info: TrackInfo, output_dir: Path, playlist_position: int = 1) -> bool:
+    def _download_track(self, track_info: TrackInfo, playlist_position: int = 1) -> bool:
         """
         Download a single track.
         
         Args:
             track_info: Track information
-            output_dir: Directory to save the track
             playlist_position: Position in playlist (for filename generation)
             
         Returns:
@@ -307,23 +341,28 @@ class DownloadWorker(QRunnable):
             self._current_track_info = full_track_data if full_track_data else track_info.to_dict()
             
             # Get download URL
+            logger.info(f"[DownloadWorker] Attempting to get download URL for track {track_info.track_id} with quality {self.quality}")
             download_url = self.deezer_api.get_track_download_url_sync(
                 track_info.track_id, 
                 quality=self.quality
             )
+            logger.info(f"[DownloadWorker] get_track_download_url_sync returned: {download_url}")
             
             if not download_url or isinstance(download_url, str) and download_url.startswith(('RIGHTS_ERROR:', 'API_ERROR:')):
                 logger.warning(f"[DownloadWorker] Cannot get download URL for track {track_info.track_id}: {download_url}")
+                logger.info(f"[DownloadWorker] download_url type: {type(download_url)}, value: {download_url}")
                 return False
             
             # Handle quality skip
             if isinstance(download_url, str) and download_url.startswith('QUALITY_SKIP:'):
                 logger.info(f"[DownloadWorker] Skipping track {track_info.track_id}: {download_url}")
                 return False
+            logger.info(f"[DownloadWorker] Proceeding with download URL: {download_url[:50] if download_url else None}...")
             
-            # Create filename
+            # Create filename and directory (including disc folders if needed)
             filename = self._create_filename(track_info, playlist_position=playlist_position)
-            file_path = output_dir / filename
+            track_dir = self._create_track_directory(track_info)
+            file_path = track_dir / filename
             
             # Skip if file already exists
             if file_path.exists():
@@ -702,22 +741,29 @@ class DownloadWorker(QRunnable):
             if not embed_artwork and not save_artwork:
                 return
             
-            # Get album cover URL
-            album_cover_url = getattr(self.item, 'album_cover_url', None)
-            if not album_cover_url:
-                logger.warning(f"[DownloadWorker] No album cover URL available for {track_info.title}")
-                return
+            # Try to use cached artwork first (from multi-disc preparation)
+            artwork_data = getattr(self, '_cached_album_artwork', None)
             
-            # Download artwork
-            artwork_data = self._download_artwork(album_cover_url)
+            # If no cached artwork, download it
             if not artwork_data:
-                return
+                # Get album cover URL
+                album_cover_url = getattr(self.item, 'album_cover_url', None)
+                if not album_cover_url:
+                    logger.warning(f"[DownloadWorker] No album cover URL available for {track_info.title}")
+                    return
+                
+                # Download artwork
+                artwork_data = self._download_artwork(album_cover_url)
+                if not artwork_data:
+                    return
+            else:
+                logger.debug(f"[DownloadWorker] Using cached album artwork for {track_info.title}")
             
             # Embed artwork in file
             if embed_artwork:
                 self._embed_artwork_in_file(file_path, artwork_data)
             
-            # Save artwork files
+            # Save artwork files (this will handle CD folder distribution if needed)
             if save_artwork:
                 self._save_artwork_files(file_path.parent, artwork_data)
                 
@@ -809,19 +855,161 @@ class DownloadWorker(QRunnable):
             artist_template = self.config.get_setting('downloads.artistImageTemplate', 'folder')
             artist_format = self.config.get_setting('downloads.artistImageFormat', 'jpg')
             
-            # Save album artwork
+            # Save album artwork in current directory (track directory or CD folder)
             album_filename = f"{album_template}.{album_format}"
             album_path = directory / album_filename
-            with open(album_path, 'wb') as f:
-                f.write(artwork_data)
-
             
-            # Save artist artwork (in parent directory) - but get the actual artist image
+            # Only save if it doesn't exist (prevents overwriting during multi-disc processing)
+            if not album_path.exists():
+                with open(album_path, 'wb') as f:
+                    f.write(artwork_data)
+                logger.debug(f"[DownloadWorker] Album cover saved to {album_path}")
+            else:
+                logger.debug(f"[DownloadWorker] Album cover already exists at {album_path}")
+            
+            # For multi-disc albums where CD folders haven't been pre-populated,
+            # save to all CD subfolders (fallback for individual track processing)
+            create_cd_folders = self.config.get_setting('downloads.folder_structure.create_cd_folders', True)
+            if create_cd_folders and self._is_multi_disc_album() and not hasattr(self, '_cached_album_artwork'):
+                self._save_album_artwork_to_cd_folders(artwork_data, album_template, album_format)
+            
+            # Save artist artwork (in artist directory)
             if self.create_artist_folders:
-                self._save_artist_artwork(directory.parent, artist_template, artist_format)
+                # Get the artist directory - always go to the root artist folder
+                artist_dir = self._get_artist_directory()
+                self._save_artist_artwork(artist_dir, artist_template, artist_format)
                 
         except Exception as e:
             logger.error(f"[DownloadWorker] Error saving artwork files: {e}")
+    
+    def _distribute_artwork_to_cd_folders(self, artwork_data: bytes, album_template: str, album_format: str):
+        """Distribute album artwork to all CD subfolders."""
+        try:
+            # Get the main album directory
+            album_dir = self._create_album_directory()
+            
+            # Get all unique disc numbers from tracks
+            disc_numbers = set()
+            for track in self.item.tracks:
+                disc_number = track.disc_number or 1
+                disc_numbers.add(disc_number)
+            
+            # Get the CD folder template
+            cd_template = self.config.get_setting('downloads.folder_structure.templates.cd', 'CD %disc_number%')
+            album_filename = f"{album_template}.{album_format}"
+            
+            logger.info(f"[DownloadWorker] Distributing album artwork to {len(disc_numbers)} CD folders")
+            
+            # Save album cover to each CD subfolder
+            for disc_number in sorted(disc_numbers):
+                cd_folder_name = cd_template.replace('%disc_number%', str(disc_number))
+                cd_folder_name = self._sanitize_filename(cd_folder_name)
+                cd_folder_path = album_dir / cd_folder_name
+                
+                # Ensure CD folder exists
+                cd_folder_path.mkdir(parents=True, exist_ok=True)
+                
+                # Save album cover in CD folder
+                album_cover_path = cd_folder_path / album_filename
+                
+                # Always save to ensure consistency (will overwrite if exists)
+                with open(album_cover_path, 'wb') as f:
+                    f.write(artwork_data)
+                logger.debug(f"[DownloadWorker] Album cover distributed to: {album_cover_path}")
+                    
+        except Exception as e:
+            logger.error(f"[DownloadWorker] Error distributing album artwork to CD folders: {e}")
+    
+    def _save_album_artwork_to_cd_folders(self, artwork_data: bytes, album_template: str, album_format: str):
+        """Save album artwork to all CD subfolders for multi-disc albums.
+        
+        Note: This method is kept for backward compatibility but the new approach 
+        uses _prepare_album_artwork_for_multi_disc for better efficiency.
+        """
+        try:
+            # Get the main album directory
+            album_dir = self._create_album_directory()
+            
+            # Get all unique disc numbers from tracks
+            disc_numbers = set()
+            for track in self.item.tracks:
+                disc_number = track.disc_number or 1
+                disc_numbers.add(disc_number)
+            
+            # Get the CD folder template
+            cd_template = self.config.get_setting('downloads.folder_structure.templates.cd', 'CD %disc_number%')
+            album_filename = f"{album_template}.{album_format}"
+            
+            # Save album cover to each CD subfolder
+            for disc_number in sorted(disc_numbers):
+                cd_folder_name = cd_template.replace('%disc_number%', str(disc_number))
+                cd_folder_name = self._sanitize_filename(cd_folder_name)
+                cd_folder_path = album_dir / cd_folder_name
+                
+                # Ensure CD folder exists
+                cd_folder_path.mkdir(parents=True, exist_ok=True)
+                
+                # Save album cover in CD folder
+                album_cover_path = cd_folder_path / album_filename
+                
+                # Only save if it doesn't already exist
+                if not album_cover_path.exists():
+                    with open(album_cover_path, 'wb') as f:
+                        f.write(artwork_data)
+                    logger.debug(f"[DownloadWorker] Album cover saved to CD folder: {album_cover_path}")
+                else:
+                    logger.debug(f"[DownloadWorker] Album cover already exists in CD folder: {album_cover_path}")
+                    
+        except Exception as e:
+            logger.error(f"[DownloadWorker] Error saving album artwork to CD folders: {e}")
+    
+    def _prepare_album_artwork_for_multi_disc(self):
+        """Download and cache album artwork, then distribute to CD folders for multi-disc albums."""
+        try:
+            # Check if artwork saving is enabled
+            save_artwork = self.config.get_setting('downloads.saveArtwork', True)
+            if not save_artwork:
+                return
+            
+            # Check if this is a multi-disc album with CD folders enabled
+            create_cd_folders = self.config.get_setting('downloads.folder_structure.create_cd_folders', True)
+            if not (create_cd_folders and self._is_multi_disc_album()):
+                return
+            
+            # Get album cover URL
+            album_cover_url = getattr(self.item, 'album_cover_url', None)
+            if not album_cover_url:
+                logger.debug(f"[DownloadWorker] No album cover URL available for multi-disc artwork distribution")
+                return
+            
+            # Download artwork once
+            artwork_data = self._download_artwork(album_cover_url)
+            if not artwork_data:
+                logger.warning(f"[DownloadWorker] Failed to download album artwork for multi-disc distribution")
+                return
+            
+            # Get artwork settings
+            album_template = self.config.get_setting('downloads.albumImageTemplate', 'cover')
+            album_format = self.config.get_setting('downloads.albumImageFormat', 'jpg')
+            
+            # Save album artwork to main album directory
+            album_dir = self._create_album_directory()
+            album_filename = f"{album_template}.{album_format}"
+            main_album_path = album_dir / album_filename
+            
+            if not main_album_path.exists():
+                with open(main_album_path, 'wb') as f:
+                    f.write(artwork_data)
+                logger.info(f"[DownloadWorker] Album cover saved to main album directory: {main_album_path}")
+            
+            # Distribute to all CD subfolders
+            self._distribute_artwork_to_cd_folders(artwork_data, album_template, album_format)
+            
+            # Cache artwork data for individual track processing
+            self._cached_album_artwork = artwork_data
+            
+        except Exception as e:
+            logger.error(f"[DownloadWorker] Error preparing album artwork for multi-disc: {e}")
     
     def _save_artist_artwork(self, artist_dir: Path, artist_template: str, artist_format: str):
         """Save actual artist artwork to artist directory."""
@@ -884,6 +1072,12 @@ class DownloadWorker(QRunnable):
     def _download_and_embed_lyrics(self, file_path: Path, track_info: TrackInfo):
         """Download and embed lyrics if enabled in settings."""
         try:
+            # Check master lyrics switch first
+            lyrics_enabled = self.config.get_setting('lyrics.enabled', True)
+            if not lyrics_enabled:
+                logger.debug(f"[DownloadWorker] Lyrics processing disabled in settings")
+                return
+            
             # Check if any lyrics feature is enabled
             lrc_enabled = self.config.get_setting('lyrics.lrc_enabled', True)
             txt_enabled = self.config.get_setting('lyrics.txt_enabled', True)
@@ -899,6 +1093,20 @@ class DownloadWorker(QRunnable):
                 logger.debug(f"[DownloadWorker] No valid track_id for lyrics: {track_info.title if track_info else 'Unknown'}")
                 return
             
+            # Additional validation: ensure file exists and is accessible
+            if not file_path or not file_path.exists():
+                logger.error(f"[DownloadWorker] Audio file does not exist for lyrics processing: {file_path}")
+                return
+            
+            # Check if file is being used by another process
+            try:
+                # Test file access before proceeding
+                with open(file_path, 'r+b') as test_file:
+                    pass
+            except (PermissionError, IOError) as e:
+                logger.warning(f"[DownloadWorker] Cannot access audio file for lyrics embedding, skipping: {e}")
+                return
+            
             # Ensure track_id is valid integer
             try:
                 track_id_int = int(track_info.track_id)
@@ -909,9 +1117,32 @@ class DownloadWorker(QRunnable):
                 logger.error(f"[DownloadWorker] Cannot convert track_id to int: {track_info.track_id}, error: {e}")
                 return
             
-            # Get lyrics from Deezer API with error handling
+            # Get lyrics from Deezer API with error handling and timeout
             try:
-                lyrics_data = self.deezer_api.get_track_lyrics_sync(track_id_int)
+                # Add timeout protection to prevent hanging
+                # Note: signal module timeout only works on Unix-like systems
+                lyrics_data = None
+                
+                if hasattr(signal, 'SIGALRM'):  # Unix-like systems
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("Lyrics API request timed out")
+                    
+                    # Set a 30-second timeout for lyrics fetching
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(30)
+                    
+                    try:
+                        lyrics_data = self.deezer_api.get_track_lyrics_sync(track_id_int)
+                    finally:
+                        signal.alarm(0)  # Cancel the alarm
+                else:
+                    # Windows - no signal-based timeout, just make the call
+                    logger.debug(f"[DownloadWorker] Signal timeout not available on this platform, proceeding without timeout")
+                    lyrics_data = self.deezer_api.get_track_lyrics_sync(track_id_int)
+                    
+            except TimeoutError:
+                logger.warning(f"[DownloadWorker] Lyrics API request timed out for track {track_id_int}")
+                return
             except Exception as e:
                 logger.error(f"[DownloadWorker] Error fetching lyrics from API for track {track_id_int}: {e}")
                 return
@@ -982,14 +1213,42 @@ class DownloadWorker(QRunnable):
             # Embed synchronized lyrics in audio file if enabled
             if embed_sync_lyrics and processed_lyrics.get('sync_lyrics'):
                 try:
-                    self._embed_sync_lyrics_in_file(file_path, processed_lyrics['sync_lyrics'])
+                    # Add file locking protection for embedded lyrics operations
+                    import fcntl
+                    try:
+                        with open(file_path, 'r+b') as lock_file:
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            try:
+                                self._embed_sync_lyrics_in_file(file_path, processed_lyrics['sync_lyrics'])
+                            finally:
+                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except (OSError, IOError) as lock_error:
+                        # File locking not supported on Windows, proceed without locking
+                        if "Operation not supported" in str(lock_error) or "Invalid argument" in str(lock_error):
+                            self._embed_sync_lyrics_in_file(file_path, processed_lyrics['sync_lyrics'])
+                        else:
+                            raise
                 except Exception as e:
                     logger.error(f"[DownloadWorker] Error embedding sync lyrics for {track_info.title}: {e}")
             
             # Embed plain text lyrics in audio file if enabled
             if embed_plain_lyrics and processed_lyrics.get('plain_text'):
                 try:
-                    self._embed_plain_lyrics_in_file(file_path, processed_lyrics['plain_text'])
+                    # Add file locking protection for embedded lyrics operations
+                    import fcntl
+                    try:
+                        with open(file_path, 'r+b') as lock_file:
+                            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                            try:
+                                self._embed_plain_lyrics_in_file(file_path, processed_lyrics['plain_text'])
+                            finally:
+                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                    except (OSError, IOError) as lock_error:
+                        # File locking not supported on Windows, proceed without locking
+                        if "Operation not supported" in str(lock_error) or "Invalid argument" in str(lock_error):
+                            self._embed_plain_lyrics_in_file(file_path, processed_lyrics['plain_text'])
+                        else:
+                            raise
                 except Exception as e:
                     logger.error(f"[DownloadWorker] Error embedding plain lyrics for {track_info.title}: {e}")
                 
@@ -1030,12 +1289,41 @@ class DownloadWorker(QRunnable):
                 logger.debug(f"[DownloadWorker] No valid sync lyrics data for MP3 embedding")
                 return
             
-            # Load MP3 file safely
-            try:
-                audio = MP3(str(file_path), ID3=ID3)
-            except Exception as e:
-                logger.error(f"[DownloadWorker] Error loading MP3 file for lyrics: {file_path}, error: {e}")
-                return
+            # Add retry mechanism for file access
+            max_retries = 3
+            retry_delay = 0.5
+            
+            for attempt in range(max_retries):
+                try:
+                    # Load MP3 file safely with timeout protection
+                    import signal
+                    
+                    def timeout_handler(signum, frame):
+                        raise TimeoutError("MP3 file loading timed out")
+                    
+                    # Set a 10-second timeout for file operations
+                    signal.signal(signal.SIGALRM, timeout_handler)
+                    signal.alarm(10)
+                    
+                    try:
+                        audio = MP3(str(file_path), ID3=ID3)
+                        break  # Success, exit retry loop
+                    finally:
+                        signal.alarm(0)  # Cancel the alarm
+                        
+                except TimeoutError:
+                    logger.warning(f"[DownloadWorker] MP3 file loading timed out, attempt {attempt + 1}/{max_retries}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"[DownloadWorker] Failed to load MP3 file after {max_retries} attempts: {file_path}")
+                        return
+                    time.sleep(retry_delay)
+                    continue
+                except Exception as e:
+                    logger.error(f"[DownloadWorker] Error loading MP3 file for lyrics: {file_path}, error: {e}")
+                    if attempt == max_retries - 1:
+                        return
+                    time.sleep(retry_delay)
+                    continue
             
             # Add ID3 tag if it doesn't exist
             if audio.tags is None:
@@ -1045,13 +1333,19 @@ class DownloadWorker(QRunnable):
                     logger.error(f"[DownloadWorker] Error adding ID3 tags to MP3: {e}")
                     return
             
-            # Remove existing synchronized lyrics
+            # Remove existing synchronized lyrics with safety check
             try:
-                audio.tags.delall('SYLT')
+                if hasattr(audio.tags, 'delall'):
+                    audio.tags.delall('SYLT')
+                else:
+                    # Fallback for older mutagen versions
+                    for tag in list(audio.tags.keys()):
+                        if tag.startswith('SYLT'):
+                            del audio.tags[tag]
             except Exception as e:
                 logger.warning(f"[DownloadWorker] Error removing existing SYLT tags: {e}")
             
-            # Convert sync_lyrics to SYLT format
+            # Convert sync_lyrics to SYLT format with enhanced validation
             sylt_data = []
             for line in sync_lyrics:
                 if not isinstance(line, dict):
@@ -1070,14 +1364,24 @@ class DownloadWorker(QRunnable):
                             seconds = int(match.group(2))
                             centiseconds = int(match.group(3))
                             timestamp_ms = (minutes * 60 * 1000) + (seconds * 1000) + (centiseconds * 10)
-                            sylt_data.append((text, timestamp_ms))
+                            
+                            # Validate timestamp range
+                            if 0 <= timestamp_ms <= 7200000:  # Max 2 hours
+                                # Sanitize text to prevent encoding issues
+                                sanitized_text = text.encode('utf-8', errors='replace').decode('utf-8')
+                                sylt_data.append((sanitized_text, timestamp_ms))
                     except Exception as e:
                         logger.warning(f"[DownloadWorker] Error parsing timestamp {timestamp_str}: {e}")
                         continue
             
             if sylt_data:
                 try:
-                    # Add synchronized lyrics tag
+                    # Limit the number of lyrics lines to prevent memory issues
+                    if len(sylt_data) > 1000:
+                        logger.warning(f"[DownloadWorker] Truncating lyrics to 1000 lines (was {len(sylt_data)})")
+                        sylt_data = sylt_data[:1000]
+                    
+                    # Add synchronized lyrics tag with proper encoding
                     audio.tags.add(
                         SYLT(
                             encoding=3,  # UTF-8
@@ -1088,10 +1392,29 @@ class DownloadWorker(QRunnable):
                         )
                     )
                     
-                    audio.save()
-                    logger.debug(f"[DownloadWorker] Embedded synchronized lyrics in MP3: {len(sylt_data)} lines")
+                    # Save with error handling and backup
+                    try:
+                        # Create backup before saving
+                        backup_path = file_path.with_suffix(file_path.suffix + '.backup')
+                        shutil.copy2(file_path, backup_path)
+                        
+                        audio.save()
+                        
+                        # Remove backup if save successful
+                        if backup_path.exists():
+                            backup_path.unlink()
+                            
+                        logger.debug(f"[DownloadWorker] Embedded synchronized lyrics in MP3: {len(sylt_data)} lines")
+                    except Exception as save_error:
+                        logger.error(f"[DownloadWorker] Error saving MP3 with sync lyrics: {save_error}")
+                        
+                        # Restore backup if save failed
+                        if backup_path.exists():
+                            shutil.move(backup_path, file_path)
+                            logger.info(f"[DownloadWorker] Restored MP3 backup after save failure")
+                        
                 except Exception as e:
-                    logger.error(f"[DownloadWorker] Error saving MP3 with sync lyrics: {e}")
+                    logger.error(f"[DownloadWorker] Error adding SYLT tag to MP3: {e}")
                 
         except Exception as e:
             logger.error(f"[DownloadWorker] Error embedding MP3 synchronized lyrics: {e}")
@@ -1108,12 +1431,32 @@ class DownloadWorker(QRunnable):
                 logger.debug(f"[DownloadWorker] No valid plain lyrics data for MP3 embedding")
                 return
             
-            # Load MP3 file safely
+            # Sanitize lyrics text to prevent encoding issues
             try:
-                audio = MP3(str(file_path), ID3=ID3)
+                sanitized_lyrics = plain_lyrics.encode('utf-8', errors='replace').decode('utf-8')
+                # Limit lyrics length to prevent memory issues
+                if len(sanitized_lyrics) > 10000:
+                    logger.warning(f"[DownloadWorker] Truncating lyrics to 10000 characters (was {len(sanitized_lyrics)})")
+                    sanitized_lyrics = sanitized_lyrics[:10000] + "...\n[Lyrics truncated]"
             except Exception as e:
-                logger.error(f"[DownloadWorker] Error loading MP3 file for plain lyrics: {file_path}, error: {e}")
+                logger.error(f"[DownloadWorker] Error sanitizing lyrics text: {e}")
                 return
+            
+            # Load MP3 file safely with retry mechanism
+            max_retries = 3
+            retry_delay = 0.5
+            
+            for attempt in range(max_retries):
+                try:
+                    audio = MP3(str(file_path), ID3=ID3)
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    logger.warning(f"[DownloadWorker] Error loading MP3 file for plain lyrics, attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"[DownloadWorker] Failed to load MP3 file after {max_retries} attempts: {file_path}")
+                        return
+                    time.sleep(retry_delay)
+                    continue
             
             # Add ID3 tag if it doesn't exist
             if audio.tags is None:
@@ -1123,9 +1466,15 @@ class DownloadWorker(QRunnable):
                     logger.error(f"[DownloadWorker] Error adding ID3 tags to MP3: {e}")
                     return
             
-            # Remove existing unsynchronized lyrics
+            # Remove existing unsynchronized lyrics with safety check
             try:
-                audio.tags.delall('USLT')
+                if hasattr(audio.tags, 'delall'):
+                    audio.tags.delall('USLT')
+                else:
+                    # Fallback for older mutagen versions
+                    for tag in list(audio.tags.keys()):
+                        if tag.startswith('USLT'):
+                            del audio.tags[tag]
             except Exception as e:
                 logger.warning(f"[DownloadWorker] Error removing existing USLT tags: {e}")
             
@@ -1136,14 +1485,33 @@ class DownloadWorker(QRunnable):
                         encoding=3,  # UTF-8
                         lang='eng',  # Language
                         desc='',     # Description
-                        text=plain_lyrics
+                        text=sanitized_lyrics
                     )
                 )
                 
-                audio.save()
-                logger.debug(f"[DownloadWorker] Embedded plain lyrics in MP3")
+                # Save with error handling and backup
+                try:
+                    # Create backup before saving
+                    backup_path = file_path.with_suffix(file_path.suffix + '.backup')
+                    shutil.copy2(file_path, backup_path)
+                    
+                    audio.save()
+                    
+                    # Remove backup if save successful
+                    if backup_path.exists():
+                        backup_path.unlink()
+                        
+                    logger.debug(f"[DownloadWorker] Embedded plain lyrics in MP3")
+                except Exception as save_error:
+                    logger.error(f"[DownloadWorker] Error saving MP3 with plain lyrics: {save_error}")
+                    
+                    # Restore backup if save failed
+                    if backup_path.exists():
+                        shutil.move(backup_path, file_path)
+                        logger.info(f"[DownloadWorker] Restored MP3 backup after save failure")
+                        
             except Exception as e:
-                logger.error(f"[DownloadWorker] Error saving MP3 with plain lyrics: {e}")
+                logger.error(f"[DownloadWorker] Error adding USLT tag to MP3: {e}")
             
         except Exception as e:
             logger.error(f"[DownloadWorker] Error embedding MP3 plain lyrics: {e}")
@@ -1160,12 +1528,21 @@ class DownloadWorker(QRunnable):
                 logger.debug(f"[DownloadWorker] No valid sync lyrics data for FLAC embedding")
                 return
             
-            # Load FLAC file safely
-            try:
-                audio = FLAC(str(file_path))
-            except Exception as e:
-                logger.error(f"[DownloadWorker] Error loading FLAC file for sync lyrics: {file_path}, error: {e}")
-                return
+            # Load FLAC file safely with retry mechanism
+            max_retries = 3
+            retry_delay = 0.5
+            
+            for attempt in range(max_retries):
+                try:
+                    audio = FLAC(str(file_path))
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    logger.warning(f"[DownloadWorker] Error loading FLAC file for sync lyrics, attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"[DownloadWorker] Failed to load FLAC file after {max_retries} attempts: {file_path}")
+                        return
+                    time.sleep(retry_delay)
+                    continue
             
             # Create LRC format text for FLAC
             lrc_lines = []
@@ -1176,16 +1553,51 @@ class DownloadWorker(QRunnable):
                 timestamp = line.get('timestamp', '')
                 text = line.get('text', '')
                 if timestamp and text:
-                    lrc_lines.append(f"{timestamp} {text}")
+                    # Sanitize text to prevent encoding issues
+                    sanitized_text = text.encode('utf-8', errors='replace').decode('utf-8')
+                    lrc_lines.append(f"{timestamp} {sanitized_text}")
             
             if lrc_lines:
                 try:
+                    # Limit the number of lyrics lines to prevent memory issues
+                    if len(lrc_lines) > 1000:
+                        logger.warning(f"[DownloadWorker] Truncating FLAC lyrics to 1000 lines (was {len(lrc_lines)})")
+                        lrc_lines = lrc_lines[:1000]
+                        lrc_lines.append("[Lyrics truncated]")
+                    
                     # Store as LYRICS tag (some players support this)
-                    audio['LYRICS'] = '\n'.join(lrc_lines)
-                    audio.save()
-                    logger.debug(f"[DownloadWorker] Embedded synchronized lyrics in FLAC: {len(lrc_lines)} lines")
+                    lyrics_content = '\n'.join(lrc_lines)
+                    
+                    # Limit total lyrics length to prevent memory issues
+                    if len(lyrics_content) > 50000:
+                        logger.warning(f"[DownloadWorker] Truncating FLAC lyrics content to 50000 characters (was {len(lyrics_content)})")
+                        lyrics_content = lyrics_content[:50000] + "\n[Lyrics truncated]"
+                    
+                    audio['LYRICS'] = lyrics_content
+                    
+                    # Save with error handling and backup
+                    try:
+                        # Create backup before saving
+                        backup_path = file_path.with_suffix(file_path.suffix + '.backup')
+                        shutil.copy2(file_path, backup_path)
+                        
+                        audio.save()
+                        
+                        # Remove backup if save successful
+                        if backup_path.exists():
+                            backup_path.unlink()
+                            
+                        logger.debug(f"[DownloadWorker] Embedded synchronized lyrics in FLAC: {len(lrc_lines)} lines")
+                    except Exception as save_error:
+                        logger.error(f"[DownloadWorker] Error saving FLAC with sync lyrics: {save_error}")
+                        
+                        # Restore backup if save failed
+                        if backup_path.exists():
+                            shutil.move(backup_path, file_path)
+                            logger.info(f"[DownloadWorker] Restored FLAC backup after save failure")
+                        
                 except Exception as e:
-                    logger.error(f"[DownloadWorker] Error saving FLAC with sync lyrics: {e}")
+                    logger.error(f"[DownloadWorker] Error adding LYRICS tag to FLAC: {e}")
                 
         except Exception as e:
             logger.error(f"[DownloadWorker] Error embedding FLAC synchronized lyrics: {e}")
@@ -1202,20 +1614,60 @@ class DownloadWorker(QRunnable):
                 logger.debug(f"[DownloadWorker] No valid plain lyrics data for FLAC embedding")
                 return
             
-            # Load FLAC file safely
+            # Sanitize lyrics text to prevent encoding issues
             try:
-                audio = FLAC(str(file_path))
+                sanitized_lyrics = plain_lyrics.encode('utf-8', errors='replace').decode('utf-8')
+                # Limit lyrics length to prevent memory issues
+                if len(sanitized_lyrics) > 50000:
+                    logger.warning(f"[DownloadWorker] Truncating FLAC lyrics to 50000 characters (was {len(sanitized_lyrics)})")
+                    sanitized_lyrics = sanitized_lyrics[:50000] + "...\n[Lyrics truncated]"
             except Exception as e:
-                logger.error(f"[DownloadWorker] Error loading FLAC file for plain lyrics: {file_path}, error: {e}")
+                logger.error(f"[DownloadWorker] Error sanitizing FLAC lyrics text: {e}")
                 return
+            
+            # Load FLAC file safely with retry mechanism
+            max_retries = 3
+            retry_delay = 0.5
+            
+            for attempt in range(max_retries):
+                try:
+                    audio = FLAC(str(file_path))
+                    break  # Success, exit retry loop
+                except Exception as e:
+                    logger.warning(f"[DownloadWorker] Error loading FLAC file for plain lyrics, attempt {attempt + 1}/{max_retries}: {e}")
+                    if attempt == max_retries - 1:
+                        logger.error(f"[DownloadWorker] Failed to load FLAC file after {max_retries} attempts: {file_path}")
+                        return
+                    time.sleep(retry_delay)
+                    continue
             
             # Add plain text lyrics
             try:
-                audio['LYRICS'] = plain_lyrics
-                audio.save()
-                logger.debug(f"[DownloadWorker] Embedded plain lyrics in FLAC")
+                audio['LYRICS'] = sanitized_lyrics
+                
+                # Save with error handling and backup
+                try:
+                    # Create backup before saving
+                    backup_path = file_path.with_suffix(file_path.suffix + '.backup')
+                    shutil.copy2(file_path, backup_path)
+                    
+                    audio.save()
+                    
+                    # Remove backup if save successful
+                    if backup_path.exists():
+                        backup_path.unlink()
+                        
+                    logger.debug(f"[DownloadWorker] Embedded plain lyrics in FLAC")
+                except Exception as save_error:
+                    logger.error(f"[DownloadWorker] Error saving FLAC with plain lyrics: {save_error}")
+                    
+                    # Restore backup if save failed
+                    if backup_path.exists():
+                        shutil.move(backup_path, file_path)
+                        logger.info(f"[DownloadWorker] Restored FLAC backup after save failure")
+                        
             except Exception as e:
-                logger.error(f"[DownloadWorker] Error saving FLAC with plain lyrics: {e}")
+                logger.error(f"[DownloadWorker] Error adding LYRICS tag to FLAC: {e}")
             
         except Exception as e:
             logger.error(f"[DownloadWorker] Error embedding FLAC plain lyrics: {e}")
@@ -1235,6 +1687,48 @@ class DownloadWorker(QRunnable):
         
         base_path.mkdir(parents=True, exist_ok=True)
         return base_path
+
+    def _create_track_directory(self, track_info: TrackInfo) -> Path:
+        """Create directory structure for individual track, including disc folders if needed."""
+        base_path = self._create_album_directory()
+        
+        # Check if CD folders should be created for multi-disc albums
+        create_cd_folders = self.config.get_setting('downloads.folder_structure.create_cd_folders', True)
+        
+        if create_cd_folders and self._is_multi_disc_album():
+            # Get the CD folder template
+            cd_template = self.config.get_setting('downloads.folder_structure.templates.cd', 'CD %disc_number%')
+            
+            # Create disc-specific folder
+            disc_number = track_info.disc_number or 1
+            cd_folder_name = cd_template.replace('%disc_number%', str(disc_number))
+            cd_folder_name = self._sanitize_filename(cd_folder_name)
+            base_path = base_path / cd_folder_name
+        
+        base_path.mkdir(parents=True, exist_ok=True)
+        return base_path
+
+    def _get_artist_directory(self) -> Path:
+        """Get the artist directory path (without album or disc folders)."""
+        if not self.create_artist_folders:
+            return self.download_path
+        
+        album_artist = self._build_album_artist_for_metadata()
+        artist_name = self._sanitize_filename(album_artist)
+        return self.download_path / artist_name
+
+    def _is_multi_disc_album(self) -> bool:
+        """Check if this is a multi-disc album by examining all track disc numbers."""
+        if not self.item.tracks:
+            return False
+        
+        disc_numbers = set()
+        for track in self.item.tracks:
+            disc_number = track.disc_number or 1
+            disc_numbers.add(disc_number)
+        
+        # Multi-disc if we have more than one disc number
+        return len(disc_numbers) > 1
     
     def _create_filename(self, track_info: TrackInfo, playlist_position: int = 1) -> str:
         """Create filename for track."""

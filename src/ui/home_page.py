@@ -52,6 +52,9 @@ class HomePage(QWidget):
     # Signal for thread-safe scroll arrow updates
     update_scroll_arrows_signal = pyqtSignal(object, object, object)
     
+    # Signal to notify when content loading is complete
+    content_loaded = pyqtSignal()
+    
     def __init__(self, deezer_api, download_manager=None, parent=None):
         super().__init__(parent)
         self.deezer_api = deezer_api
@@ -215,12 +218,11 @@ class HomePage(QWidget):
             self._show_error_message("DeezerAPI not initialized. Please restart the application.")
             return
             
-        # Check if ARL token is configured
+        # Check if ARL token is configured (but allow loading public content without it)
         arl_token = self.deezer_api.arl if hasattr(self.deezer_api, 'arl') else None
         if not arl_token:
-            logger.error("HomePage: Cannot load content - No ARL token configured.")
-            self._show_error_message("No ARL token configured. Please go to Settings > Account to configure your Deezer ARL token.")
-            return
+            logger.warning("HomePage: No ARL token configured - some content may not be available.")
+            # Don't return here - allow loading public content
 
         # Clear existing sections from layout if any (in case of reload)
         while self.main_content_layout.count():
@@ -257,14 +259,33 @@ class HomePage(QWidget):
 
             try:
                 items_data = await api_call(limit=limit)
+                
+                # Add a small delay after chart API calls to prevent session race conditions
+                if section_title in ["Most Streamed Artists", "Top Albums"]:
+                    await asyncio.sleep(0.1)  # 100ms delay to prevent session conflicts
+                
+                # Fallback for New Releases if editorial releases fail
+                if not items_data and section_title == "New Releases":
+                    logger.warning("Editorial releases failed, falling back to chart albums")
+                    try:
+                        items_data = await self.deezer_api.get_chart_albums(limit=limit)
+                        if items_data:
+                            logger.info(f"HomePage: Using chart albums as fallback for New Releases: {len(items_data)} items")
+                    except Exception as fallback_error:
+                        logger.error(f"Fallback to chart albums also failed: {fallback_error}")
+                
                 if items_data:
                     logger.info(f"HomePage: Received {len(items_data)} items for '{section_title}'.")
                     
                     # Clear previous items in this specific section's content layout
-                    while content_layout.count() > 1: # Keep the stretch
-                        item_to_remove = content_layout.takeAt(0)
-                        if item_to_remove.widget():
-                            item_to_remove.widget().deleteLater()
+                    try:
+                        while content_layout.count() > 1: # Keep the stretch
+                            item_to_remove = content_layout.takeAt(0)
+                            if item_to_remove.widget():
+                                item_to_remove.widget().deleteLater()
+                    except RuntimeError:
+                        # Layout has been deleted, skip clearing
+                        logger.warning(f"HomePage: Layout for '{section_title}' has been deleted, skipping clear")
                     
                     # Get the parent widget (scroll_content_widget) for the cards in this section
                     current_section_scroll_area = self.section_scroll_areas.get(section_title)
@@ -325,9 +346,17 @@ class HomePage(QWidget):
                     logger.info(f"HomePage: No items returned for '{section_title}'.")
             except Exception as e:
                 logger.error(f"HomePage: Error loading content for '{section_title}': {e}", exc_info=True)
+                # For Top Albums, if it fails during initial load, just skip it
+                # The "View All" functionality will still work
+                if section_title == "Top Albums":
+                    logger.info(f"Skipping '{section_title}' section due to initial load timing issue")
         
                 logger.critical(f"!!!!!!!!!!!!!! HomePage.load_content FINISHED. Total sections in main_content_layout: {self.main_content_layout.count()} !!!!!!!!!!!!!!")
         self.main_content_layout.addStretch(1) # Add a final stretch to the main page layout
+        
+        # Emit signal to notify that content loading is complete
+        self.content_loaded.emit()
+        logger.info("HomePage: Content loading complete, emitted content_loaded signal")
 
     def _show_error_message(self, message: str):
         """Show error message on the home page."""

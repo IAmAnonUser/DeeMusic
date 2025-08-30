@@ -30,35 +30,47 @@ class LyricsProcessor:
             'copyright': None
         }
         
-        if not lyrics_data:
+        if not lyrics_data or not isinstance(lyrics_data, dict):
             return result
         
-        # Get synchronized lyrics
-        sync_json = lyrics_data.get('LYRICS_SYNC_JSON', [])
-        if sync_json and isinstance(sync_json, list):
-            result['has_sync'] = True
-            for sync_line in sync_json:
-                if isinstance(sync_line, dict):
-                    timestamp = sync_line.get('lrc_timestamp', '')
-                    text = sync_line.get('line', '').strip()
-                    if timestamp and text:
-                        result['sync_lyrics'].append({
-                            'timestamp': timestamp,
-                            'text': text
-                        })
+        try:
+            # Get synchronized lyrics
+            sync_json = lyrics_data.get('LYRICS_SYNC_JSON', [])
+            if sync_json and isinstance(sync_json, list):
+                result['has_sync'] = True
+                for sync_line in sync_json:
+                    if isinstance(sync_line, dict):
+                        timestamp = sync_line.get('lrc_timestamp', '')
+                        text = sync_line.get('line', '').strip()
+                        if timestamp and text:
+                            result['sync_lyrics'].append({
+                                'timestamp': timestamp,
+                                'text': text
+                            })
+        except Exception as e:
+            logger.warning(f"Error parsing synchronized lyrics: {e}")
         
-        # Get plain text lyrics as fallback
-        plain_lyrics = lyrics_data.get('LYRICS_TEXT', '')
-        if plain_lyrics:
-            result['plain_text'] = plain_lyrics.strip()
+        try:
+            # Get plain text lyrics as fallback
+            plain_lyrics = lyrics_data.get('LYRICS_TEXT', '')
+            if plain_lyrics and isinstance(plain_lyrics, str):
+                result['plain_text'] = plain_lyrics.strip()
+        except Exception as e:
+            logger.warning(f"Error parsing plain text lyrics: {e}")
         
         # If no plain text but we have sync lyrics, create plain text from sync
         if not result['plain_text'] and result['sync_lyrics']:
-            result['plain_text'] = '\n'.join([line['text'] for line in result['sync_lyrics']])
+            try:
+                result['plain_text'] = '\n'.join([line['text'] for line in result['sync_lyrics']])
+            except Exception as e:
+                logger.warning(f"Error creating plain text from sync lyrics: {e}")
         
         # Get metadata
-        result['language'] = lyrics_data.get('LYRICS_LANG', None)
-        result['copyright'] = lyrics_data.get('LYRICS_COPYRIGHTS', None)
+        try:
+            result['language'] = lyrics_data.get('LYRICS_LANG', None)
+            result['copyright'] = lyrics_data.get('LYRICS_COPYRIGHTS', None)
+        except Exception as e:
+            logger.warning(f"Error parsing lyrics metadata: {e}")
         
         return result
     
@@ -178,11 +190,24 @@ class LyricsProcessor:
             bool: True if successful, False otherwise
         """
         try:
+            # Validate inputs
+            if not lrc_content or not isinstance(lrc_content, str):
+                logger.warning("No valid LRC content provided")
+                return False
+                
+            if not file_path:
+                logger.error("No file path provided for LRC save")
+                return False
+            
             # Ensure directory exists
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Failed to create directory for LRC file {file_path.parent}: {e}")
+                return False
             
             # Write LRC file
-            with open(file_path, 'w', encoding=encoding) as f:
+            with open(file_path, 'w', encoding=encoding, errors='replace') as f:
                 f.write(lrc_content)
             
             logger.info(f"Successfully saved LRC file: {file_path}")
@@ -206,11 +231,24 @@ class LyricsProcessor:
             bool: True if successful, False otherwise
         """
         try:
+            # Validate inputs
+            if not lyrics_text or not isinstance(lyrics_text, str):
+                logger.warning("No valid lyrics text provided")
+                return False
+                
+            if not file_path:
+                logger.error("No file path provided for lyrics save")
+                return False
+            
             # Ensure directory exists
-            file_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error(f"Failed to create directory for lyrics file {file_path.parent}: {e}")
+                return False
             
             # Write text file
-            with open(file_path, 'w', encoding=encoding) as f:
+            with open(file_path, 'w', encoding=encoding, errors='replace') as f:
                 f.write(lyrics_text)
             
             logger.info(f"Successfully saved lyrics file: {file_path}")

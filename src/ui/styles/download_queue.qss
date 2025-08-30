@@ -107,14 +107,93 @@ QPushButton#RetryButton:pressed, QPushButton#GroupRetryButton:pressed {
 QProgressBar {
     border: none;
     background-color: #E5E5E5;
-    height: 4px;
-    border-radius: 2px;
+    height: 6px;
+    border-radius: 3px;
     text-align: center;
 }
 
 QProgressBar::chunk {
     background-color: #3BC8E7;
-    border-radius: 2px;
+    border-radius: 3px;
+}
+
+/* New queue item widget styles for condensed layout */
+QueueItemWidget {
+    border: 1px solid #E5E5E5;
+    border-radius: 4px;
+    background-color: white;
+    margin: 1px;
+}
+
+QueueItemWidget[downloadState="downloading"] {
+    border-color: #3BC8E7;
+    background-color: rgba(59, 200, 231, 0.05);
+}
+
+QueueItemWidget[downloadState="completed"] {
+    border-color: #00AA00;
+    background-color: rgba(0, 170, 0, 0.05);
+}
+
+QueueItemWidget[downloadState="failed"] {
+    border-color: #CC0000;
+    background-color: rgba(204, 0, 0, 0.05);
+}
+
+QueueItemWidget[downloadState="cancelled"] {
+    border-color: #AA6600;
+    background-color: rgba(170, 102, 0, 0.05);
+}
+
+QueueItemWidget[downloadState="paused"] {
+    border-color: #AA6600;
+    background-color: rgba(170, 102, 0, 0.05);
+}
+
+/* Compact button styles */
+QPushButton#RemoveButton {
+    background-color: transparent;
+    border: none;
+    color: #CC0000;
+    font-weight: bold;
+    border-radius: 10px;
+}
+
+QPushButton#RemoveButton:hover {
+    background-color: rgba(204, 0, 0, 0.1);
+}
+
+/* Compact labels */
+QLabel#ItemTypeLabel {
+    color: #666666;
+    font-size: 7pt;
+    font-weight: bold;
+}
+
+QLabel#ItemTitleLabel {
+    color: #32323D;
+    font-size: 9pt;
+    font-weight: bold;
+}
+
+QLabel#ItemArtistLabel {
+    color: #72727D;
+    font-size: 8pt;
+}
+
+QLabel#ItemTrackCountLabel {
+    color: #72727D;
+    font-size: 8pt;
+}
+
+QLabel#ItemProgressLabel {
+    color: #72727D;
+    font-size: 7pt;
+}
+
+QLabel#ItemStatusLabel {
+    font-size: 7pt;
+    font-style: italic;
 }
 
 QScrollArea {
@@ -124,4 +203,53 @@ QScrollArea {
 
 QWidget#downloads-container {
     background-color: white;
-} 
+}
+
+/* Queue widget header styles */
+QLabel#QueueTitle {
+    font-size: 14px;
+    font-weight: bold;
+    color: #32323D;
+}
+
+QLabel#QueueStats {
+    font-size: 11px;
+    color: #72727D;
+}
+
+QLabel#QueueStatusLabel {
+    font-size: 10px;
+    color: #72727D;
+    font-style: italic;
+}
+
+/* Compact action buttons */
+QPushButton#ClearAllButton,
+QPushButton#ClearCompletedButton,
+QPushButton#ClearFailedButton,
+QPushButton#RetryFailedButton {
+    background-color: transparent;
+    border: 1px solid #72727D;
+    border-radius: 4px;
+    color: #72727D;
+    font-size: 10px;
+    padding: 4px 8px;
+    margin: 1px;
+}
+
+QPushButton#ClearAllButton:hover,
+QPushButton#ClearCompletedButton:hover,
+QPushButton#ClearFailedButton:hover,
+QPushButton#RetryFailedButton:hover {
+    background-color: rgba(114, 114, 125, 0.1);
+    border-color: #32323D;
+    color: #32323D;
+}
+
+QPushButton#ClearAllButton:disabled,
+QPushButton#ClearCompletedButton:disabled,
+QPushButton#ClearFailedButton:disabled,
+QPushButton#RetryFailedButton:disabled {
+    color: #CCCCCC;
+    border-color: #CCCCCC;
+}

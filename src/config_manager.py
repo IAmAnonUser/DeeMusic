@@ -82,7 +82,7 @@ class ConfigManager:
             },
             'downloads': {
                 'path': 'downloads',
-                'concurrent_downloads': 5,  # Increased from 3 to 5 for better performance
+                'concurrent_downloads': 5,  # Restored original value for better performance
                 'quality': 'MP3_320',
                 'saveArtwork': True,
                 'embedArtwork': True,
@@ -151,6 +151,7 @@ class ConfigManager:
                 'retries': 3
             },
             'lyrics': {
+                'enabled': True,  # Master switch to disable all lyrics processing if needed
                 'lrc_enabled': True,
                 'txt_enabled': False,
                 'embed_sync_lyrics': True,

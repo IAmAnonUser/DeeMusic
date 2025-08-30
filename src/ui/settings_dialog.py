@@ -115,9 +115,9 @@ class SettingsDialog(QDialog):
         download_form.addRow("Audio Quality:", self.quality_combo)
         
         self.concurrent_downloads = QSpinBox()
-        self.concurrent_downloads.setRange(1, 10)  # Allow up to 10 for power users
+        self.concurrent_downloads.setRange(1, 5)  # Maximum 5 for system stability
         self.concurrent_downloads.setValue(3)
-        self.concurrent_downloads.setToolTip("Number of simultaneous downloads (actual threads may be optimized higher for better performance)")
+        self.concurrent_downloads.setToolTip("Number of simultaneous downloads (maximum 5 for system stability)")
         download_form.addRow("Concurrent Downloads:", self.concurrent_downloads)
         
         self.overwrite_existing = QCheckBox("Overwrite existing files")
@@ -196,103 +196,7 @@ class SettingsDialog(QDialog):
         # Add downloads tab
         tabs.addTab(downloads_tab, "Downloads")
         
-        # Network tab
-        network_tab = QWidget()
-        network_layout = QVBoxLayout(network_tab)
-        
-        # Proxy settings
-        proxy_group = QGroupBox("Proxy Settings")
-        proxy_layout = QVBoxLayout(proxy_group)
-        
-        # Proxy description
-        proxy_desc = QLabel(
-            "Configure proxy settings to bypass geo-restrictions. "
-            "This will route Deezer API requests through the specified proxy server."
-        )
-        proxy_desc.setWordWrap(True)
-        proxy_desc.setStyleSheet("color: #666; margin-bottom: 10px;")
-        proxy_layout.addWidget(proxy_desc)
-        
-        # Enable proxy checkbox
-        self.enable_proxy = QCheckBox("Enable Proxy")
-        proxy_layout.addWidget(self.enable_proxy)
-        
-        # Proxy configuration form
-        proxy_form = QFormLayout()
-        
-        # Proxy type
-        self.proxy_type = QComboBox()
-        self.proxy_type.addItems(["http", "https", "socks4", "socks5"])
-        proxy_form.addRow("Type:", self.proxy_type)
-        
-        # Host and port
-        host_port_layout = QHBoxLayout()
-        self.proxy_host = QLineEdit()
-        self.proxy_host.setPlaceholderText("proxy.example.com")
-        self.proxy_port = QLineEdit()
-        self.proxy_port.setPlaceholderText("8080")
-        self.proxy_port.setMaximumWidth(80)
-        host_port_layout.addWidget(self.proxy_host)
-        host_port_layout.addWidget(QLabel(":"))
-        host_port_layout.addWidget(self.proxy_port)
-        host_port_layout.addStretch()
-        proxy_form.addRow("Host:Port:", host_port_layout)
-        
-        # Username and password (optional)
-        self.proxy_username = QLineEdit()
-        self.proxy_username.setPlaceholderText("Optional")
-        proxy_form.addRow("Username:", self.proxy_username)
-        
-        self.proxy_password = QLineEdit()
-        self.proxy_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.proxy_password.setPlaceholderText("Optional")
-        proxy_form.addRow("Password:", self.proxy_password)
-        
-        proxy_layout.addLayout(proxy_form)
-        
-        # Usage options
-        self.use_for_api = QCheckBox("Use for API requests (recommended for geo-restrictions)")
-        self.use_for_api.setChecked(True)
-        self.use_for_downloads = QCheckBox("Use for file downloads")
-        self.use_for_downloads.setChecked(True)
-        
-        proxy_layout.addWidget(self.use_for_api)
-        proxy_layout.addWidget(self.use_for_downloads)
-        
-        # Test proxy button
-        self.test_proxy_button = QPushButton("Test Proxy Connection")
-        self.test_proxy_button.clicked.connect(self.test_proxy_connection)
-        proxy_layout.addWidget(self.test_proxy_button)
-        
-        # Proxy recommendations
-        recommendations_group = QGroupBox("Recommended Proxy Services")
-        recommendations_layout = QVBoxLayout(recommendations_group)
-        
-        recommendations_text = QLabel(
-            "<b>Free Options:</b><br>"
-            "• ProxyScrape (proxy-daily.com)<br>"
-            "• FreeProxy.cz<br>"
-            "• Free-Proxy-List.net<br><br>"
-            "<b>Paid Services (More Reliable):</b><br>"
-            "• Bright Data (premium, $500+/month)<br>"
-            "• Oxylabs ($15+/month)<br>"
-            "• Smartproxy ($12.5+/month)<br>"
-            "• ProxyMesh ($20/month unlimited)<br><br>"
-            "<b>Note:</b> Paid services are more reliable for consistent geo-restriction bypass."
-        )
-        recommendations_text.setWordWrap(True)
-        recommendations_text.setStyleSheet("font-size: 11px; color: #555;")
-        recommendations_layout.addWidget(recommendations_text)
-        
-        network_layout.addWidget(proxy_group)
-        network_layout.addWidget(recommendations_group)
-        network_layout.addStretch()
-        
-        # Connect proxy enable/disable
-        self.enable_proxy.toggled.connect(self.on_proxy_enabled_changed)
-        
-        # Add network tab
-        tabs.addTab(network_tab, "Network")
+
         
         # Lyrics tab
         lyrics_tab = QWidget()
@@ -506,6 +410,8 @@ class SettingsDialog(QDialog):
         
         # Add Library Scanner tab
         tabs.addTab(library_scanner_tab, "Library Scanner")
+        
+
         
         # Structure tab (renamed from Appearance, now includes file/folder structure)
         structure_tab = QWidget()
@@ -775,7 +681,8 @@ class SettingsDialog(QDialog):
                 self.quality_combo.setCurrentIndex(i)
                 break
         
-        self.concurrent_downloads.setValue(self.config.get_setting("downloads.concurrent_downloads", 3))
+        concurrent_value = self.config.get_setting("downloads.concurrent_downloads", 3)
+        self.concurrent_downloads.setValue(concurrent_value)
         self.overwrite_existing.setChecked(self.config.get_setting("downloads.overwrite_existing", False))
         self.skip_existing.setChecked(self.config.get_setting("downloads.skip_existing", True))
         self.create_playlist_m3u.setChecked(self.config.get_setting("downloads.create_playlist_m3u", False))
@@ -808,19 +715,7 @@ class SettingsDialog(QDialog):
         self.artist_image_format.setCurrentText(self.config.get_setting("downloads.artistImageFormat", "jpg"))
         self.embedded_artwork_size.setValue(self.config.get_setting("downloads.embeddedArtworkSize", 1000))
         
-        # Load proxy settings
-        proxy_config = self.config.get_setting("network.proxy", {})
-        self.enable_proxy.setChecked(proxy_config.get('enabled', False))
-        self.proxy_type.setCurrentText(proxy_config.get('type', 'http'))
-        self.proxy_host.setText(proxy_config.get('host', ''))
-        self.proxy_port.setText(str(proxy_config.get('port', '')))
-        self.proxy_username.setText(proxy_config.get('username', ''))
-        self.proxy_password.setText(proxy_config.get('password', ''))
-        self.use_for_api.setChecked(proxy_config.get('use_for_api', True))
-        self.use_for_downloads.setChecked(proxy_config.get('use_for_downloads', True))
-        
-        # Set initial proxy UI state
-        self.on_proxy_enabled_changed()
+
         
         # Load lyrics settings
         self.lrc_enabled.setChecked(self.config.get_setting('lyrics.lrc_enabled', True))
@@ -864,14 +759,25 @@ class SettingsDialog(QDialog):
 
     def show_folder_settings(self):
         """Show the folder structure settings dialog."""
-        current_settings = self.config.get_setting('downloads.folder_structure', {})
+        current_settings = {
+            **self.config.get_setting('downloads.folder_structure', {}),
+            'character_replacement': self.config.get_setting('downloads.character_replacement', {})
+        }
         dialog = FolderSettingsDialog(current_settings, self)
         dialog.settings_changed.connect(self.on_folder_settings_changed)
         dialog.exec()
 
     def on_folder_settings_changed(self, settings):
-        """Handle changes to folder structure settings."""
+        """Handle changes to folder structure and character replacement settings."""
+        # Extract character replacement settings
+        char_replacement = settings.pop('character_replacement', {})
+        
+        # Save folder structure settings
         self.config.set_setting('downloads.folder_structure', settings)
+        
+        # Save character replacement settings
+        if char_replacement:
+            self.config.set_setting('downloads.character_replacement', char_replacement)
 
     def browse_lyrics_path(self):
         """Open file dialog to select lyrics folder."""
@@ -894,6 +800,8 @@ class SettingsDialog(QDialog):
         )
         if path:
             self.download_path.setText(path)
+
+
 
     def save_settings(self):
         """Save all settings to config manager."""
@@ -932,7 +840,12 @@ class SettingsDialog(QDialog):
             self.config.set_setting('downloads.quality', quality)
             changes['downloads.quality'] = quality
         
+        # Get concurrent downloads from Downloads tab
         concurrent = self.concurrent_downloads.value()
+        
+        # SAFETY: Cap concurrent downloads at 5 for system stability
+        concurrent = min(concurrent, 5)
+        
         old_concurrent = self.config.get_setting('downloads.concurrent_downloads', 3)
         if concurrent != old_concurrent:
             self.config.set_setting('downloads.concurrent_downloads', concurrent)
@@ -1044,21 +957,7 @@ class SettingsDialog(QDialog):
             self.config.set_setting('downloads.embeddedArtworkSize', embedded_size)
             changes['downloads.embeddedArtworkSize'] = embedded_size
         
-        # Save proxy settings
-        proxy_config = {
-            'enabled': self.enable_proxy.isChecked(),
-            'type': self.proxy_type.currentText(),
-            'host': self.proxy_host.text(),
-            'port': self.proxy_port.text(),
-            'username': self.proxy_username.text(),
-            'password': self.proxy_password.text(),
-            'use_for_api': self.use_for_api.isChecked(),
-            'use_for_downloads': self.use_for_downloads.isChecked()
-        }
-        old_proxy_config = self.config.get_setting("network.proxy", {})
-        if proxy_config != old_proxy_config:
-            self.config.set_setting("network.proxy", proxy_config)
-            changes['network.proxy'] = proxy_config
+
         
         # Save lyrics settings
         lrc_enabled = self.lrc_enabled.isChecked()

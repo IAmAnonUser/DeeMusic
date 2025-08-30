@@ -32,7 +32,7 @@ a = Analysis(
         (str(current_dir / 'src' / 'ui' / 'styles'), 'src/ui/styles'),
     ],
     hiddenimports=[
-        # Core PyQt6 modules
+        # Core PyQt6 modules - ONLY PyQt6
         'PyQt6.QtCore',
         'PyQt6.QtWidgets', 
         'PyQt6.QtGui',
@@ -48,37 +48,79 @@ a = Analysis(
         'email',
         'email.mime',
         'email.mime.text',
+        'json',
+        'pathlib',
+        'asyncio',
+        'threading',
+        'concurrent.futures',
         
         # Essential libraries
         'qasync',
         'requests',
         'aiohttp',
+        'aiohttp.client',
+        'aiohttp.connector',
+        'cryptography',
         'cryptography.hazmat.primitives.ciphers',
         'cryptography.hazmat.backends.openssl',
         'Cryptodome.Cipher.Blowfish',
+        'mutagen',
         'mutagen.mp3',
         'mutagen.flac',
         'mutagen.id3',
+        'pathvalidate',
+        'spotipy',
+        'fuzzywuzzy',
+        'fuzzywuzzy.fuzz',
         
-        # Application modules
+        # Application modules - Core
         'src.ui.main_window',
         'src.ui.home_page',
         'src.ui.search_widget',
         'src.ui.artist_detail_page',
         'src.ui.album_detail_page',
-        'src.ui.download_queue_widget',
+        'src.ui.playlist_detail_page',
         'src.ui.theme_manager',
+        'src.ui.settings_dialog',
+        'src.ui.folder_settings_dialog',
         'src.config_manager',
+        
+        # Services - New System
         'src.services.deezer_api',
-        'src.services.download_manager',
+        'src.services.download_service',
+        'src.services.new_download_engine',
+        'src.services.new_download_worker',
+        'src.services.new_queue_manager',
+        'src.services.event_bus',
+        'src.services.spotify_api',
+        'src.services.music_player',
+        
+        # Models and Utils
+        'src.models.queue_models',
         'src.utils.image_cache',
+        'src.utils.helpers',
+        'src.utils.icon_utils',
+        
+        # UI Components
+        'src.ui.components.search_result_card',
+        'src.ui.components.toggle_switch',
+        'src.ui.components.progress_card',
+        'src.ui.components.new_queue_widget',
+        'src.ui.components.new_queue_item_widget',
     ],
     hookspath=[],
     hooksconfig={{}},
     runtime_hooks=[],
     excludes=[
-        # Exclude heavy unused modules (but keep essential standard library modules)
+        # Exclude conflicting Qt bindings - CRITICAL FIX
+        'PyQt5',
+        'PyQt5.QtCore',
+        'PyQt5.QtWidgets',
+        'PyQt5.QtGui',
+        'PySide2',
+        'PySide6',
         'tkinter',
+        # Exclude heavy unused modules
         'matplotlib',
         'pandas',
         'numpy',
@@ -98,14 +140,10 @@ a = Analysis(
         'curses',
         'readline',
         'rlcompleter',
-        # Note: DO NOT exclude 'xml' - it's needed by pkg_resources and other core modules
-        # Note: DO NOT exclude 'email' - it's needed by various libraries
-        # Note: DO NOT exclude 'html' - it's needed by various libraries
         'http.server',
         'urllib.robotparser',
-        # 'distutils',  # Commented out - causes conflicts
-        # 'setuptools',  # Commented out - may be needed
-        # 'pkg_resources',  # Commented out - may be needed
+        # Exclude problematic modules that cause hook issues
+        'rapidfuzz',
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

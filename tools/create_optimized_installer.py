@@ -12,23 +12,16 @@ from pathlib import Path
 import datetime
 
 def get_version():
-    """Get version from version_info.txt or default."""
+    """Get version from centralized version.py file."""
     try:
-        version_file = Path("version_info.txt")
-        if version_file.exists():
-            content = version_file.read_text()
-            # Extract version from PyInstaller version info file
-            import re
-            match = re.search(r"filevers=\((\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)", content)
-            if match:
-                return f"{match.group(1)}.{match.group(2)}.{match.group(3)}"
-            # Fallback: look for ProductVersion string
-            match = re.search(r"ProductVersion.*?'(\d+\.\d+\.\d+)", content)
-            if match:
-                return match.group(1)
-        return "1.0.6"
-    except:
-        return "1.0.6"
+        # Import version from the root directory
+        import sys
+        sys.path.insert(0, str(Path().absolute()))
+        from version import __version__
+        return __version__
+    except ImportError:
+        # Fallback if version.py doesn't exist
+        return "1.0.7"
 
 def create_optimized_installer():
     """Create an optimized installer package."""
@@ -167,47 +160,18 @@ echo.
 echo 💡 This is a FALSE POSITIVE. DeeMusic is safe and open-source.
 echo    You may need to add DeeMusic to your antivirus exclusions.
 echo.
-set /p continue="Continue with installation? (y/n): "
-if /i "!continue!" neq "y" (
-    echo Installation cancelled by user.
-    pause
-    exit /b 0
-)
+echo Proceeding with automatic installation...
 echo.
 
-:menu
-echo [3/6] Choose installation type:
+echo [3/6] Automatic installation type selection:
 echo.
-echo [1] 🏢 System Installation (Recommended)
+echo Selecting System Installation (Recommended)
 echo     • Install to Program Files
 echo     • Available for all users
 echo     • Start Menu shortcuts
-echo     • Desktop shortcut option
-echo     • Requires administrator privileges
+echo     • Desktop shortcut created automatically
 echo.
-echo [2] 👤 User Installation
-echo     • Install to user directory
-echo     • Available for current user only
-echo     • Start Menu shortcuts
-echo     • Desktop shortcut option
-echo.
-echo [3] 💼 Portable Installation
-echo     • Run from current directory
-echo     • No system integration
-echo     • No shortcuts created
-echo     • Fully portable
-echo.
-echo [4] ❌ Cancel Installation
-echo.
-set /p choice="Enter your choice (1-4): "
-
-if "!choice!"=="1" goto install_system
-if "!choice!"=="2" goto install_user
-if "!choice!"=="3" goto install_portable
-if "!choice!"=="4" goto cancel
-echo Invalid choice. Please try again.
-echo.
-goto menu
+goto install_system
 
 :install_system
 echo.
@@ -269,15 +233,13 @@ if "!install_type!"=="System" (
     set "start_menu_path=%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs"
 )
 
-powershell -Command "$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('!start_menu_path!\\DeeMusic.lnk'); $Shortcut.TargetPath = '!install_path!\\DeeMusic.exe'; $Shortcut.IconLocation = '!install_path!\\logo.ico'; $Shortcut.Description = 'DeeMusic - Modern Music Streaming and Downloading'; $Shortcut.Save()" >nul 2>&1
+powershell -Command "$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('!start_menu_path!\\DeeMusic.lnk'); $Shortcut.TargetPath = '!install_path!\\DeeMusic.exe'; $Shortcut.IconLocation = '!install_path!\\DeeMusic.exe,0'; $Shortcut.Description = 'DeeMusic - Modern Music Streaming and Downloading'; $Shortcut.Save()" >nul 2>&1
 echo ✅ Start Menu shortcut created
 
-:: Desktop shortcut option
-set /p desktop="Create desktop shortcut? (y/n): "
-if /i "!desktop!"=="y" (
-    powershell -Command "$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%USERPROFILE%\\Desktop\\DeeMusic.lnk'); $Shortcut.TargetPath = '!install_path!\\DeeMusic.exe'; $Shortcut.IconLocation = '!install_path!\\logo.ico'; $Shortcut.Description = 'DeeMusic - Modern Music Streaming and Downloading'; $Shortcut.Save()" >nul 2>&1
-    echo ✅ Desktop shortcut created
-)
+:: Desktop shortcut (automatically created)
+echo Creating desktop shortcut...
+powershell -Command "$WshShell = New-Object -comObject WScript.Shell; $Shortcut = $WshShell.CreateShortcut('%USERPROFILE%\\Desktop\\DeeMusic.lnk'); $Shortcut.TargetPath = '!install_path!\\DeeMusic.exe'; $Shortcut.IconLocation = '!install_path!\\DeeMusic.exe,0'; $Shortcut.Description = 'DeeMusic - Modern Music Streaming and Downloading'; $Shortcut.Save()" >nul 2>&1
+echo ✅ Desktop shortcut created
 
 :: Add to Windows Programs list (for system installation)
 if "!install_type!"=="System" (
@@ -325,17 +287,17 @@ echo 🔧 Troubleshooting:
 echo    • If antivirus blocks DeeMusic, add it to exclusions
 echo    • For support, visit: https://github.com/IAmAnonUser/DeeMusic
 echo.
-set /p launch="Launch DeeMusic now? (y/n): "
-if /i "!launch!"=="y" (
-    if "!install_type!"=="Portable" (
-        start "" "DeeMusic.exe"
-    ) else (
-        start "" "!install_path!\\DeeMusic.exe"
-    )
+echo Launching DeeMusic automatically...
+timeout /t 2 /nobreak >nul
+if "!install_type!"=="Portable" (
+    start "" "DeeMusic.exe"
+) else (
+    start "" "!install_path!\\DeeMusic.exe"
 )
 echo.
 echo Thank you for choosing DeeMusic! 🎵
-pause
+echo Installation completed successfully. DeeMusic is now starting...
+timeout /t 3 /nobreak >nul
 goto :eof
 
 :cancel
@@ -414,13 +376,8 @@ echo    • Type: !install_type! Installation
 echo    • Location: !install_path!
 echo.
 
-:: Confirmation
-set /p confirm="Are you sure you want to uninstall DeeMusic? (y/n): "
-if /i "!confirm!" neq "y" (
-    echo Uninstallation cancelled.
-    pause
-    exit /b 0
-)
+:: Automatic uninstallation
+echo Proceeding with automatic uninstallation...
 
 echo.
 echo [1/4] Stopping DeeMusic processes...
@@ -470,22 +427,8 @@ if "!install_type!"=="System" (
 
 echo.
 echo [4/4] User data and settings...
-set /p remove_data="Remove user settings and downloaded music? (y/n): "
-if /i "!remove_data!"=="y" (
-    if exist "%APPDATA%\\DeeMusic" (
-        rmdir /s /q "%APPDATA%\\DeeMusic" >nul 2>&1
-        echo ✅ User settings removed
-    )
-    
-    :: Ask about music library
-    set /p remove_music="Remove downloaded music library? (y/n): "
-    if /i "!remove_music!"=="y" (
-        echo ⚠️  Please manually delete your music library folder if desired.
-        echo    (Default location varies based on your settings)
-    )
-) else (
-    echo ✅ User settings preserved
-)
+echo Preserving user settings and downloaded music...
+echo ✅ User settings preserved
 
 cls
 echo.
@@ -695,10 +638,10 @@ echo.
 :: Check available disk space
 echo [3/6] Checking available disk space...
 for /f "tokens=3" %%a in ('dir /-c "%SystemDrive%\\" ^| find "bytes free"') do set FREE_SPACE=%%a
-set /a FREE_SPACE_MB=%FREE_SPACE%/1048576
-echo Available space: %FREE_SPACE_MB% MB
+set /a FREE_SPACE_MB=%FREE_SPACE%/1048576 2>nul
+if not defined FREE_SPACE_MB set FREE_SPACE_MB=0
 if %FREE_SPACE_MB% geq 100 (
-    echo ✅ Sufficient disk space available
+    echo ✅ Sufficient disk space available (%FREE_SPACE_MB% MB)
 ) else (
     echo ❌ Insufficient disk space (need at least 100 MB)
     set "compatible=false"

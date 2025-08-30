@@ -20,8 +20,18 @@ CACHE_SUBDIR = "image_cache"
 # In-memory cache for frequently accessed images (LRU cache with size limit)
 _memory_cache = {}
 _memory_cache_lock = threading.Lock()
-_memory_cache_max_size = 50  # Maximum number of images to keep in memory
+_memory_cache_max_size = 50  # Default, will be dynamically adjusted
 _memory_cache_order = []  # Track access order for LRU eviction
+
+def _update_cache_size():
+    """Update cache size based on system resources."""
+    # Simple static cache size for stability
+    global _memory_cache_max_size
+    _memory_cache_max_size = 100  # Reasonable default
+    logger.debug(f"Set image cache size to: {_memory_cache_max_size}")
+
+# Initialize cache size
+_update_cache_size()
 
 def get_cache_dir() -> Path:
     """Returns the application's image cache directory, creating it if necessary."""

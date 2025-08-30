@@ -5,6 +5,43 @@ All notable changes to DeeMusic will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2025-01-30
+
+### 🎵 Spotify Playlist Conversion
+- **✅ Fixed Conversion Error**: Resolved "item_data is not defined" error that prevented Spotify playlist conversion
+  - **Variable Name Fix**: Corrected undefined variable reference in playlist conversion display code
+  - **Improved Error Handling**: Better error messages and debugging for playlist conversion issues
+  - **Seamless Integration**: Spotify playlists now convert smoothly to Deezer downloads
+
+### 🎨 Enhanced User Interface
+- **🎯 Uniform Playlist Display**: Completely redesigned Spotify playlist conversion results to match DeeMusic's interface
+  - **Professional Header**: Styled playlist title and conversion statistics with consistent typography
+  - **Sortable Track List**: Added clickable column headers (TRACK, ARTIST, ALBUM, DUR.) for sorting
+  - **Match Quality Indicators**: Visual tooltips showing match confidence (Excellent/Good/Fair/Weak match)
+  - **Failed Match Styling**: Subtle red background and border for tracks not found on Deezer
+  - **Download All Button**: Prominent purple button matching DeeMusic's design language
+  - **Consistent Spacing**: Proper margins and padding throughout the conversion results
+
+### 🚀 Automated Installer
+- **⚡ Zero-Prompt Installation**: Completely automated installer with no user prompts required
+  - **Auto System Installation**: Automatically installs to Program Files (requires admin rights)
+  - **Auto Desktop Shortcut**: Creates desktop shortcut with proper icon automatically
+  - **Auto Launch**: Launches DeeMusic immediately after installation
+  - **Fixed Desktop Icons**: Resolved blank desktop shortcut icons by using embedded executable icons
+  - **Streamlined Experience**: Installation completes in under 30 seconds with zero user input
+
+### 🔧 Technical Improvements
+- **🖼️ Icon System Enhancement**: Improved shortcut icon handling across all installer types
+  - **Embedded Icon Usage**: Uses icons embedded in DeeMusic.exe instead of separate .ico files
+  - **Cross-Platform Compatibility**: Better icon handling for Windows shortcuts and registry entries
+  - **Consistent Display**: All shortcuts (Desktop, Start Menu, Quick Launch) use the same icon source
+
+### 📦 Build System
+- **🏗️ Updated Build Tools**: Enhanced installer creation with improved automation
+  - **Version Synchronization**: Automatic version detection and updating across all installer components
+  - **Professional Packaging**: Consistent branding and styling across all installer elements
+  - **Quality Assurance**: Improved error handling and validation in build scripts
+
 ## [1.0.6] - 2025-07-26
 
 ### 🎯 Major Track Number Fix

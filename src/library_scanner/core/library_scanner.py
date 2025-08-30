@@ -357,11 +357,10 @@ class LibraryScanner:
             
             # Clean and validate album
             if not is_valid_metadata(album):
-                # Try to extract album from folder name
-                folder_name = Path(file_path).parent.name
-                if is_valid_metadata(folder_name):
-                    album = folder_name
-                    logger.info(f"Using folder name as album: '{album}' for file: {file_path}")
+                # Try to extract album from folder name with multi-disc detection
+                album = self._extract_album_name_with_disc_detection(file_path)
+                if is_valid_metadata(album):
+                    logger.info(f"Using extracted album name: '{album}' for file: {file_path}")
                 else:
                     album = "Unknown Album"
             
@@ -452,4 +451,41 @@ class LibraryScanner:
     
     def get_tracks_by_artist(self, artist: str) -> List[TrackInfo]:
         """Get all tracks by a specific artist."""
-        return [track for track in self.tracks if track.artist == artist or track.album_artist == artist] 
+        return [track for track in self.tracks if track.artist == artist or track.album_artist == artist]
+
+    def _extract_album_name_with_disc_detection(self, file_path: str) -> str:
+        """Extract album name with multi-disc detection.
+        
+        Handles folder structures like:
+        - Artist/Album Name/CD1/track.mp3 -> "Album Name"
+        - Artist/Album Name/Disc 1/track.mp3 -> "Album Name"
+        - Artist/Album Name/Disk 2/track.mp3 -> "Album Name"
+        - Artist/Album Name/track.mp3 -> "Album Name"
+        """
+        import re
+        
+        path = Path(file_path)
+        folder_name = path.parent.name
+        
+        # Common disc folder patterns
+        disc_patterns = [
+            r'^CD\s*[0-9]+$',           # CD1, CD 1, CD2, etc.
+            r'^Disc\s*[0-9]+$',         # Disc1, Disc 1, Disc2, etc.
+            r'^Disk\s*[0-9]+$',         # Disk1, Disk 1, Disk2, etc.
+            r'^Side\s*[A-Z]$',          # Side A, Side B
+            r'^Part\s*[0-9]+$',         # Part1, Part 1, Part2, etc.
+            r'^Vol\s*[0-9]+$',          # Vol1, Vol 1, Vol2, etc.
+            r'^Volume\s*[0-9]+$',       # Volume1, Volume 1, Volume2, etc.
+        ]
+        
+        # Check if current folder matches disc pattern
+        is_disc_folder = any(re.match(pattern, folder_name, re.IGNORECASE) for pattern in disc_patterns)
+        
+        if is_disc_folder:
+            # This is a disc folder, use parent folder as album name
+            parent_folder = path.parent.parent.name
+            logger.info(f"[MULTI_DISC_FIX] Detected disc folder '{folder_name}', using parent '{parent_folder}' as album name")
+            return parent_folder
+        else:
+            # Regular folder, use as album name
+            return folder_name 

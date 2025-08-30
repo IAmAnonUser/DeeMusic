@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QSpinBox, QFileDialog, QMenuBar, QMenu,
     QMessageBox, QDialog, QScrollArea, QStatusBar, QSplashScreen
 )
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, pyqtSignal, QTimer
 from PyQt6.QtGui import QIcon, QAction, QPixmap
 # Component imports
 from .components.toggle_switch import ToggleSwitch # Added import
@@ -26,13 +26,18 @@ from .folder_settings_dialog import FolderSettingsDialog
 from .playlist_detail_page import PlaylistDetailPage # Added import
 from .album_detail_page import AlbumDetailPage # Import AlbumDetailPage
 from .artist_detail_page import ArtistDetailPage # Import ArtistDetailPage
-from .download_queue_widget import DownloadQueueWidget # ADDED: Import DownloadQueueWidget
+# Legacy download queue widget moved to backup
+# from .download_queue_widget import DownloadQueueWidget
+from .components.new_queue_widget import NewQueueWidget # NEW: Import new queue widget
 from .library_scanner_widget_minimal import LibraryScannerWidget # ADDED: Import LibraryScannerWidget
 from src.config_manager import ConfigManager
 from src.services.deezer_api import DeezerAPI
-from src.services.download_manager import DownloadManager
+from src.services.download_service import DownloadService
+# Legacy import moved to backup - using new system only
+# from src.services.download_manager import DownloadManager
 from src.services.music_player import MusicPlayer, DummyMusicPlayer
-from src.services.queue_manager import QueueManager, Track
+# Legacy queue manager moved to backup
+# from src.services.queue_manager import QueueManager, Track
 import logging
 import os
 import asyncio 
@@ -74,20 +79,16 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.config = config if config is not None else ConfigManager()
         self.theme_manager = ThemeManager()
-        # Ensure loop is not stored
-        # self.loop = loop 
+        
+        # Initialize performance monitoring (disabled for stability)
+        self.performance_monitor = None 
         
         # Initialize managers to None initially
         self.deezer_api = None
-        self.download_manager = None
+        self.download_service = None  # New download service
         # Initialize player and queue manager
         self.music_player = DummyMusicPlayer() # MODIFIED
-        try:
-            self.queue_manager = QueueManager()
-            logger.info("QueueManager initialized.")
-        except Exception as e:
-            logger.error(f"Failed to initialize QueueManager: {e}")
-            raise
+        # Legacy queue manager removed - using new download service queue management
         
         self.setWindowTitle("DeeMusic")
         self.setMinimumSize(1400, 900) # MODIFIED: Increased width and height to show more content
@@ -107,114 +108,306 @@ class MainWindow(QMainWindow):
         self.current_album_load_task = None 
         self.current_artist_load_task = None 
 
+    def showEvent(self, event):
+        """Called when the window is shown. Initialize services here."""
+        super().showEvent(event)
+        if not hasattr(self, '_services_initialized') or not self._services_initialized:
+            self._services_initialized = True
+            logger.info("[ShowEvent] Scheduling service initialization...")
+            # Schedule the async initialization using QTimer
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, lambda: asyncio.create_task(self.initialize_services()))
+        else:
+            logger.info("[ShowEvent] Services already initialized, skipping")
+
+
+    
+    def _check_and_migrate_queue_data(self):
+        """Check if queue data migration is needed and perform it."""
+        try:
+            from pathlib import Path
+            import sys
+            
+            # Add tools to path for migration script
+            tools_path = Path(__file__).parent.parent.parent / "tools"
+            if str(tools_path) not in sys.path:
+                sys.path.insert(0, str(tools_path))
+            
+            from migrate_queue_data import QueueMigrator
+            
+            # Get app data directory
+            app_data_dir = Path(self.config.config_dir)
+            old_queue_file = app_data_dir / "download_queue_state.json"
+            new_queue_file = app_data_dir / "new_queue_state.json"
+            
+            # Check if migration is needed
+            if old_queue_file.exists() and not new_queue_file.exists():
+                logger.info("[Migration] Old queue data found, performing migration...")
+                
+                migrator = QueueMigrator(app_data_dir)
+                success = migrator.migrate()
+                
+                if success and migrator.verify_migration():
+                    logger.info("[Migration] Queue data migration completed successfully")
+                else:
+                    logger.error("[Migration] Queue data migration failed")
+            else:
+                logger.info("[Migration] No migration needed")
+                
+        except Exception as e:
+            logger.error(f"[Migration] Error during queue data migration: {e}")
+    
+    def _setup_queue_widget(self):
+        """Set up the proper queue widget after services are initialized."""
+        try:
+            # Check feature flag
+            use_new_queue_system = self.config.get_setting('experimental.new_queue_system', False)  # Default to False for safety
+            
+            logger.info(f"[Queue Widget Setup] Feature flag 'experimental.new_queue_system': {use_new_queue_system}")
+            logger.info(f"[Queue Widget Setup] Has download_service: {hasattr(self, 'download_service')}")
+            logger.info(f"[Queue Widget Setup] Download service exists: {self.download_service is not None if hasattr(self, 'download_service') else 'N/A'}")
+            
+            if use_new_queue_system and hasattr(self, 'download_service') and self.download_service:
+                logger.info("[Queue Widget Setup] Creating new queue widget")
+                
+                # Find the splitter first
+                splitter = None
+                for i in range(self.main_layout.count()):
+                    item = self.main_layout.itemAt(i)
+                    if hasattr(item, 'widget') and item.widget():
+                        widget = item.widget()
+                        if hasattr(widget, 'addWidget') and hasattr(widget, 'count'):
+                            splitter = widget
+                            break
+                
+                if splitter and hasattr(self, 'download_queue_widget') and self.download_queue_widget:
+                    # Remove old widget from splitter (not layout)
+                    old_widget = self.download_queue_widget
+                    old_widget.setParent(None)  # Remove from splitter
+                    old_widget.deleteLater()
+                    
+                    # Create new queue widget
+                    self.download_queue_widget = NewQueueWidget(self.download_service, parent=self)
+                    self.download_queue_widget.setMinimumWidth(450)
+                    self.download_queue_widget.setMaximumWidth(600)
+                    
+                    # Set size policy to expand vertically
+                    self.download_queue_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+                    
+                    # Add new widget to splitter
+                    splitter.addWidget(self.download_queue_widget)
+                    
+                    # Reset splitter proportions
+                    splitter.setSizes([800, 500])
+                    splitter.setStretchFactor(0, 1)  # Content stretches
+                    splitter.setStretchFactor(1, 0)  # Queue doesn't stretch
+                    
+                    logger.info("[Queue Widget Setup] Successfully replaced queue widget in splitter")
+                else:
+                    logger.error("[Queue Widget Setup] Could not find splitter or old widget to replace")
+                
+                logger.info("[Queue Widget Setup] New queue widget created and added to layout")
+            else:
+                logger.info("[Queue Widget Setup] Using legacy queue widget (feature flag disabled or service unavailable)")
+                
+        except Exception as e:
+            logger.error(f"[Queue Widget Setup] Error setting up queue widget: {e}")
+    
     async def initialize_services(self):
         """Initialize asynchronous services like DeezerAPI."""
+        # Guard against multiple initializations
+        if hasattr(self, '_initialization_in_progress') and self._initialization_in_progress:
+            logger.warning("[Initialize Services] Initialization already in progress, skipping")
+            return
+        
+        if hasattr(self, '_services_fully_initialized') and self._services_fully_initialized:
+            logger.warning("[Initialize Services] Services already fully initialized, skipping")
+            return
+        
+        self._initialization_in_progress = True
         logger.info("[Initialize Services] Starting...")
-        logger.info("[Initialize Services] Initializing DeezerAPI...")
-        self.deezer_api = DeezerAPI(self.config, loop=asyncio.get_running_loop())
-        initialized = await self.deezer_api.initialize()
-        if not initialized:
-            logger.error("[Initialize Services] Failed to initialize DeezerAPI.")
-        else:
-            logger.info("[Initialize Services] DeezerAPI initialized successfully.")
+        
+        try:
+            # Deezer API init
+            logger.info("[Initialize Services] Initializing DeezerAPI...")
+            self.deezer_api = DeezerAPI(self.config, loop=asyncio.get_running_loop())
             
-        # Check ARL token status
-        arl_token = self.config.get_setting('deezer.arl', '')
-        if not arl_token:
-            logger.warning("[Initialize Services] No ARL token configured - home page content will not load")
-            logger.warning("[Initialize Services] Please configure your ARL token in Settings > Account")
-        else:
-            logger.info(f"[Initialize Services] ARL token configured (length: {len(arl_token)})")
-            # Skip API test during initialization to improve startup speed
-            # The home page will test the token when it loads content
+            # No need to reset CSRF state with simplified approach
+            logger.info("[Initialize Services] DeezerAPI initialized with simplified CSRF handling")
             
-        logger.info("[Initialize Services] Initializing DownloadManager...")
-        self.download_manager = DownloadManager(self.config, self.deezer_api) 
-        logger.info("[Initialize Services] DownloadManager initialized.")
-
-        # Pass initialized managers to the page instances
-        if self.home_page:
-            self.home_page.deezer_api = self.deezer_api
-            self.home_page.download_manager = self.download_manager
-            logger.info("[Initialize Services] Updated HomePage with DeezerAPI and DownloadManager.")
-
-        if self.search_widget_page:
-            self.search_widget_page.deezer_api = self.deezer_api
-            # self.search_widget_page.download_manager is already set in its constructor in setup_content_area
-            # BUT it would have received None if self.download_manager wasn't ready then.
-            # Let's ensure it gets the proper one.
-            self.search_widget_page.download_manager = self.download_manager 
-            logger.info("[Initialize Services] Updated SearchWidget with DeezerAPI and DownloadManager.")
-
-        if self.playlist_detail_page:
-            self.playlist_detail_page.deezer_api = self.deezer_api
-            self.playlist_detail_page.download_manager = self.download_manager
-            logger.info("[Initialize Services] Updated PlaylistDetailPage with DeezerAPI and DownloadManager.")
-
-        if self.album_detail_page:
-            self.album_detail_page.deezer_api = self.deezer_api
-            self.album_detail_page.download_manager = self.download_manager
-            logger.info("[Initialize Services] Updated AlbumDetailPage with DeezerAPI and DownloadManager.")
-
-        if self.artist_detail_page:
-            self.artist_detail_page.deezer_api = self.deezer_api
-            self.artist_detail_page.download_manager = self.download_manager
-            logger.info("[Initialize Services] Updated ArtistDetailPage with DeezerAPI and DownloadManager.")
-
-        if hasattr(self, 'download_queue_widget') and self.download_queue_widget:
-            logger.info("[Initialize Services] Setting DownloadManager for DownloadQueueWidget.")
-            self.download_queue_widget.set_download_manager(self.download_manager)
-            # Load previous download queue state (failed downloads) if any
-            try:
-                self.download_queue_widget.load_queue_state()
-                logger.info("[Initialize Services] Download queue state loaded.")
-            except Exception as e:
-                logger.error(f"[Initialize Services] Failed to load download queue state: {e}")
-        else:
-            logger.warning("[Initialize Services] DownloadQueueWidget not found to set DownloadManager.")
-
-        logger.info("[Initialize Services] Setting up content area...")
-        # self.setup_content_area() is now called from within self.setup_ui for page initialization
-        # but components needing deezer_api are initialized here or passed API later
-        # if self.playlist_detail_page: # REMOVED, API passed in constructor
-            # self.playlist_detail_page.set_deezer_api(self.deezer_api) # REMOVED
-        # if self.album_detail_page: # REMOVED, API passed in constructor
-            # self.album_detail_page.set_deezer_api(self.deezer_api) # REMOVED
-        # if self.artist_detail_page: # REMOVED, API passed in constructor
-            # self.artist_detail_page.set_deezer_api(self.deezer_api) # REMOVED
-
-        logger.info("[Initialize Services] Content area set up and API passed to pages.")
-
-        if self.home_page and self.deezer_api and self.deezer_api.initialized:
-            logger.info("[Initialize Services] Triggering HomePage content loading...")
-            asyncio.create_task(self.home_page.load_content())
-        else:
-            logger.warning("[Initialize Services] HomePage or DeezerAPI not ready for content load.")
-
-        logger.info("[Initialize Services] Connecting signals...")
-        self.connect_signals()
-        if self.home_page:
-            if not hasattr(self.home_page, '_signals_connected_mw') or not self.home_page._signals_connected_mw:
-                logger.info("[Initialize Services] Connecting HomePage signals in initialize_services...")
-                print(f"[PRINT DEBUG] MainWindow: Connecting home_page.artist_selected to show_artist_detail")
-                self.home_page.album_selected.connect(self.show_album_detail)
-                self.home_page.playlist_selected.connect(self.show_playlist_detail)
-                self.home_page.artist_selected.connect(self.show_artist_detail)
-                print(f"[PRINT DEBUG] MainWindow: home_page.artist_selected.connect(self.show_artist_detail) completed")
-                self.home_page.view_all_requested.connect(self.display_view_all_results_from_home)
-                self.home_page.home_item_selected.connect(self._handle_home_page_item_navigation)
-                self.home_page.home_item_download_requested.connect(self._handle_home_item_download) # Ensure this is connected
-                self.home_page._signals_connected_mw = True # Mark as connected
-                logger.info("[Initialize Services] Connected HomePage navigation and download signals.")
+            # Test ARL token validity
+            if self.deezer_api.test_arl_validity():
+                logger.info("[Initialize Services] ARL token validation successful")
             else:
-                logger.info("[Initialize Services] HomePage signals already connected.")
-                print(f"[PRINT DEBUG] MainWindow: HomePage signals already connected (skipping)")
-        else:
-            logger.warning("[Initialize Services] HomePage not available to connect signals.")
+                logger.error("[Initialize Services] ARL token validation failed - token may be expired or invalid")
             
-        logger.info("[Initialize Services] Signals connected via connect_signals method call next...")
-        self.connect_signals() # This call can remain if it handles other signals or if above is moved into it
-        logger.info("[Initialize Services] Finished full initialization and signal setup.")
+            # Test token refresh functionality
+            if self.deezer_api.force_token_refresh_test():
+                logger.info("[Initialize Services] Token refresh test successful")
+            else:
+                logger.error("[Initialize Services] Token refresh test failed")
+            
+            # Set up periodic token refresh to prevent CSRF errors
+            self._setup_periodic_token_refresh()
+            
+            initialized = await self.deezer_api.initialize()
+            if not initialized:
+                logger.error("[Initialize Services] Failed to initialize DeezerAPI.")
+            else:
+                logger.info("[Initialize Services] DeezerAPI initialized successfully.")
+            
+            # Check ARL token status and authenticate if available
+            arl_token = self.config.get_setting('deezer.arl', '')
+            if not arl_token:
+                logger.warning("[Initialize Services] No ARL token configured - home page content will not load")
+                logger.warning("[Initialize Services] Please configure your ARL token in Settings > Account")
+            else:
+                logger.info(f"[Initialize Services] ARL token configured (length: {len(arl_token)})")
+                # Set ARL token but defer authentication to avoid blocking startup
+                self.deezer_api.arl = arl_token
+                self.config.set_setting('deezer.arl', arl_token)
+
+                logger.info("[Initialize Services] ARL token set, authentication will happen on demand")
+            
+            # Check feature flag to determine which system to use
+            use_new_queue_system = self.config.get_setting('experimental.new_queue_system', False)
+            logger.info(f"[Initialize Services] Feature flag 'experimental.new_queue_system': {use_new_queue_system}")
+            
+            # Check if migration is needed
+            self._check_and_migrate_queue_data()
+            
+            if use_new_queue_system:
+                # Initialize new download service
+                logger.info("[Initialize Services] Initializing new DownloadService...")
+                try:
+                    self.download_service = DownloadService(self.config, self.deezer_api)
+                    self.download_service.start()
+                    logger.info("[Initialize Services] New DownloadService initialized and started.")
+                except Exception as e:
+                    logger.error(f"[Initialize Services] Failed to initialize new DownloadService: {e}")
+                    logger.info("[Initialize Services] Falling back to legacy DownloadManager...")
+                    use_new_queue_system = False
+            
+            # Now that services are initialized, create the proper queue widget
+            logger.info("[Initialize Services] About to setup queue widget...")
+            self._setup_queue_widget()
+            logger.info("[Initialize Services] Queue widget setup completed")
+            
+            # Pass initialized managers to the page instances
+            if self.home_page:
+                self.home_page.deezer_api = self.deezer_api
+                logger.info("[Initialize Services] Updated HomePage with DeezerAPI.")
+            
+            if self.search_widget_page:
+                self.search_widget_page.deezer_api = self.deezer_api
+                self.search_widget_page.download_service = self.download_service
+                logger.info("[Initialize Services] Updated SearchWidget with DeezerAPI and DownloadService.")
+            
+            if self.playlist_detail_page:
+                self.playlist_detail_page.deezer_api = self.deezer_api
+                logger.info("[Initialize Services] Updated PlaylistDetailPage with DeezerAPI.")
+            
+            if self.album_detail_page:
+                self.album_detail_page.deezer_api = self.deezer_api
+                logger.info("[Initialize Services] Updated AlbumDetailPage with DeezerAPI.")
+            
+            if self.artist_detail_page:
+                self.artist_detail_page.deezer_api = self.deezer_api
+                logger.info("[Initialize Services] Updated ArtistDetailPage with DeezerAPI.")
+            
+            if hasattr(self, 'download_queue_widget') and self.download_queue_widget:
+                if isinstance(self.download_queue_widget, NewQueueWidget):
+                    logger.info("[Initialize Services] New queue widget already initialized with DownloadService")
+                logger.info("[Initialize Services] Queue loading deferred for better startup performance.")
+            else:
+                logger.warning("[Initialize Services] DownloadQueueWidget not found to set DownloadManager.")
+            
+            logger.info("[Initialize Services] Setting up content area...")
+            
+            # Performance monitor disabled for stability
+            self._connect_performance_monitor()
+            
+            # Initialize Library Scanner
+            if hasattr(self, 'library_scanner_widget') and self.library_scanner_widget:
+                logger.info("[Initialize Services] Library Scanner initialized and ready.")
+            else:
+                logger.warning("[Initialize Services] Library Scanner not available.")
+            
+            # Queue processing will be started manually when needed
+            logger.info("[Initialize Services] Queue processing ready (will start on demand)")
+            
+            logger.info("[Initialize Services] Content area set up and API passed to pages.")
+            
+            # Critical debug info
+            try:
+                logger.critical(f"[Initialize Services] CRITICAL DEBUG: home_page={self.home_page is not None}, deezer_api={self.deezer_api is not None}")
+                if self.home_page:
+                    logger.critical(f"[Initialize Services] HomePage exists, deezer_api on home_page: {hasattr(self.home_page, 'deezer_api') and self.home_page.deezer_api is not None}")
+                if self.deezer_api:
+                    logger.critical(f"[Initialize Services] DeezerAPI exists, initialized: {getattr(self.deezer_api, 'initialized', False)}")
+            except Exception as e:
+                logger.error(f"[Initialize Services] Error in debug logging: {e}", exc_info=True)
+            
+            # Trigger home page content loading
+            if self.home_page and self.deezer_api:
+                logger.info("[Initialize Services] Triggering HomePage content loading...")
+                # Create a task and store reference to prevent garbage collection
+                self._home_content_task = asyncio.create_task(self.home_page.load_content())
+                
+                # Add a callback to log completion
+                def content_loaded(task):
+                    try:
+                        task.result()
+                        logger.info("[Initialize Services] HomePage content loading completed successfully")
+                    except Exception as e:
+                        logger.error(f"[Initialize Services] Error loading HomePage content: {e}", exc_info=True)
+                
+                self._home_content_task.add_done_callback(content_loaded)
+            else:
+                logger.warning(f"[Initialize Services] HomePage or DeezerAPI not available for content load. home_page={self.home_page is not None}, deezer_api={self.deezer_api is not None}")
+            
+
+            
+            logger.info("[Initialize Services] Connecting signals...")
+            self.connect_signals()
+            if self.home_page:
+                if not hasattr(self.home_page, '_signals_connected_mw') or not self.home_page._signals_connected_mw:
+                    logger.info("[Initialize Services] Connecting HomePage signals in initialize_services...")
+                    print(f"[PRINT DEBUG] MainWindow: Connecting home_page.artist_selected to show_artist_detail")
+                    self.home_page.album_selected.connect(self.show_album_detail)
+                    self.home_page.playlist_selected.connect(self.show_playlist_detail)
+                    self.home_page.artist_selected.connect(self.show_artist_detail)
+                    print(f"[PRINT DEBUG] MainWindow: home_page.artist_selected.connect(self.show_artist_detail) completed")
+                    self.home_page.view_all_requested.connect(self.display_view_all_results_from_home)
+                    self.home_page.home_item_selected.connect(self._handle_home_page_item_navigation)
+                    self.home_page.home_item_download_requested.connect(self._handle_home_item_download)
+                    self.home_page.content_loaded.connect(self.load_queue_state_deferred)
+                    self.home_page._signals_connected_mw = True
+                    logger.info("[Initialize Services] Connected HomePage navigation and download signals.")
+                else:
+                    logger.info("[Initialize Services] HomePage signals already connected.")
+                    print(f"[PRINT DEBUG] MainWindow: HomePage signals already connected (skipping)")
+            else:
+                logger.warning("[Initialize Services] HomePage not available to connect signals.")
+                logger.info("[Initialize Services] Signals connected via connect_signals method call next...")
+                self.connect_signals()
+                logger.info("[Initialize Services] Finished full initialization and signal setup.")
+            
+            # Mark initialization as complete
+            self._services_fully_initialized = True
+        except Exception as e:
+            logger.error(f"[Initialize Services] Error during initialization: {e}")
+            raise
+        finally:
+            self._initialization_in_progress = False
+
+    def _connect_performance_monitor(self):
+        """Connect performance monitor to download service in a deferred manner."""
+        try:
+            # Legacy performance monitor connection removed - new system handles optimization internally
+            pass
+        except Exception as e:
+            logger.error(f"[Initialize Services] Error connecting performance monitor: {e}")
 
     def connect_signals(self):
         """Connect signals for various UI components."""
@@ -300,13 +493,9 @@ class MainWindow(QMainWindow):
             self.artist_detail_page.playlist_selected_for_download.connect(self._handle_playlist_download_request)
             logger.info("MainWindow: Connected all artist detail page signals")
 
-        # DownloadQueueWidget Signals (if it emits signals MainWindow needs to handle beyond what DM does)
+        # DownloadQueueWidget Signals - using new download service
         if self.download_queue_widget:
-            # Example: self.download_queue_widget.item_action_requested.connect(self._handle_download_queue_action)
-            # Make sure DownloadManager signals are connected to DownloadQueueWidget
-            if self.download_manager and hasattr(self.download_queue_widget, 'set_download_manager') and not self.download_queue_widget.download_manager:
-                logger.info("Connecting DownloadManager to DownloadQueueWidget in connect_signals as it was missing.")
-                self.download_queue_widget.set_download_manager(self.download_manager)
+            # Legacy download manager connections removed - new system handles this automatically
             pass
         
         # MusicPlayer and QueueManager signals (if UI needs to react to player state)
@@ -318,6 +507,21 @@ class MainWindow(QMainWindow):
         #     self.queue_manager.current_track_changed.connect(self.update_now_playing_info)
 
         logger.info("MainWindow: Signals connected.")
+
+    def _handle_auto_restart_notification(self, reason: str):
+        """Handle automatic restart notification from download manager."""
+        try:
+            logger.info(f"[AUTO_RESTART_UI] Received auto restart notification: {reason}")
+            
+            # Show a brief status message
+            if hasattr(self, 'statusBar'):
+                self.statusBar().showMessage(f"Auto-restarted stalled downloads: {reason}", 5000)
+            
+            # You could also show a more prominent notification here if desired
+            # For now, just log it and show in status bar
+            
+        except Exception as e:
+            logger.error(f"[AUTO_RESTART_UI] Error handling auto restart notification: {e}")
 
     def get_asset_path(self, filename: str) -> str:
         """Get the full path to an asset file."""
@@ -331,14 +535,14 @@ class MainWindow(QMainWindow):
 
         # Initialize pages here, but pass deezer_api during initialize_services
         self.home_page = HomePage(deezer_api=None, download_manager=None, parent=self) # API/DM set later
-        self.search_widget_page = SearchWidget(deezer_api=None, download_manager=self.download_manager, config_manager=self.config, parent=self)
+        self.search_widget_page = SearchWidget(deezer_api=None, download_service=None, config_manager=self.config, parent=self)
         
         # Detail Pages (API and DM passed later or on creation if safe)
-        self.playlist_detail_page = PlaylistDetailPage(deezer_api=None, download_manager=self.download_manager, parent=self)
-        self.album_detail_page = AlbumDetailPage(deezer_api=None, download_manager=self.download_manager, parent=self)
-        self.artist_detail_page = ArtistDetailPage(deezer_api=None, download_manager=self.download_manager, parent=self)
+        self.playlist_detail_page = PlaylistDetailPage(deezer_api=None, download_manager=None, parent=self)
+        self.album_detail_page = AlbumDetailPage(deezer_api=None, download_manager=None, parent=self)
+        self.artist_detail_page = ArtistDetailPage(deezer_api=None, download_manager=None, parent=self)
         
-        # Library Scanner Widget (NEW)
+        # Library Scanner Widget
         self.library_scanner_widget = LibraryScannerWidget(config_manager=self.config, parent=self)
         
         self.content_stack.addWidget(self.home_page)            # Index 0
@@ -386,12 +590,13 @@ class MainWindow(QMainWindow):
     def show_library_scanner(self):
         """Show the Library Scanner widget."""
         logger.info("Showing Library Scanner")
-        target_index = self.content_stack.indexOf(self.library_scanner_widget)
-        if target_index != -1:
-            self._switch_to_view(target_index)
-            self._update_back_button_visibility()
+        if self.library_scanner_widget:
+            self.content_stack.setCurrentWidget(self.library_scanner_widget)
+            self.setWindowTitle("DeeMusic - Library Scanner")
         else:
-            logger.error("Library Scanner widget not found in content stack")
+            logger.error("Library Scanner widget not initialized")
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Error", "Library Scanner could not be loaded.")
 
     def handle_settings_changed(self, changes: dict):
         """Handle changes from the settings dialog."""
@@ -417,11 +622,8 @@ class MainWindow(QMainWindow):
             'downloads.quality', 'downloads.path', 'downloads.concurrent_downloads'
         ]
         if any(change.startswith('downloads.') for change in changes.keys()):
-            if self.download_manager:
-                logger.info("Refreshing download manager settings due to configuration changes")
-                self.download_manager.refresh_settings()
-            else:
-                logger.warning("Cannot refresh download manager settings - download manager not available")
+            # Legacy download manager refresh removed - new system handles config changes automatically
+            pass
 
     def load_stylesheet(self):
         """Load and apply the QSS stylesheet based on the current theme."""
@@ -487,18 +689,21 @@ class MainWindow(QMainWindow):
         # self.logo_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #6C2BD9;") # Basic style, refine in QSS
         top_bar_layout.addWidget(self.logo_label)
 
-        # Add a small spacer to push search bar a bit to the right
-        top_bar_layout.addSpacing(40) # MODIFIED: Increased spacing
+        # Add small spacing between logo and search bar
+        top_bar_layout.addSpacing(15) # Reduced spacing to keep search bar close to logo
 
-        # Search Bar (made narrower to fit Library Scanner button)
+        # Search Bar (positioned right next to DEEMUSIC logo)
         self.search_bar = QLineEdit()
         self.search_bar.setObjectName("searchBar") # For QSS styling
         self.search_bar.setPlaceholderText("Artists, Albums, Tracks, Playlists, Spotify Playlist URL...")
         self.search_bar.returnPressed.connect(self._handle_header_search)
-        self.search_bar.setMinimumWidth(400) # MODIFIED: Made narrower to fit Library Scanner button
-        self.search_bar.setMaximumWidth(600) # ADDED: Set maximum width to prevent it from being too wide
-        self.search_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        top_bar_layout.addWidget(self.search_bar, 1)
+        self.search_bar.setMinimumWidth(350) # Set appropriate width for left position
+        self.search_bar.setMaximumWidth(450) # Reduced max width since it's on the left
+        self.search_bar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        top_bar_layout.addWidget(self.search_bar)
+        
+        # Add expanding spacer to push Library Scanner and controls to the right
+        top_bar_layout.addStretch(1)
 
         # Library Scanner Button (NEW)
         self.library_scanner_btn = QPushButton("📚 Library Scanner")
@@ -557,31 +762,37 @@ class MainWindow(QMainWindow):
 
         # --- Main Content Area (QStackedWidget) ---
         self.setup_content_area() # Initialize pages and add to content_stack
-        self.main_layout.addWidget(self.content_stack, 1) # Content stack takes up remaining space
 
         # --- Download Queue (Now a separate widget, not part of player bar) ---
-        # Create the DownloadQueueWidget instance
-        self.download_queue_widget = DownloadQueueWidget(parent=self) # Pass None for DM, will be set later
-        self.download_queue_widget.setMinimumWidth(400) # Increased from 300 to 400
-        self.download_queue_widget.setMaximumWidth(550) # Increased from 450 to 550
-
-        # Add DownloadQueueWidget to a new layout next to content_stack if desired,
-        # or handle its visibility/placement differently (e.g., a toggleable panel).
-        # For now, let's put it next to the content_stack in a QHBoxLayout.
+        # Create placeholder - will be replaced after services are initialized
+        logger.info("[UI Setup] Creating placeholder queue widget (will be replaced after service initialization)")
+        # Create placeholder widget - will be replaced with proper queue widget after service initialization
+        self.download_queue_widget = QWidget(parent=self)
+        placeholder_layout = QVBoxLayout(self.download_queue_widget)
+        placeholder_layout.addWidget(QLabel("Download queue loading..."))
+        self.download_queue_widget.setMinimumWidth(450)
+        self.download_queue_widget.setMaximumWidth(600)
         
-        content_and_queue_layout = QHBoxLayout()
-        content_and_queue_layout.addWidget(self.content_stack, 1) # Content stack takes most space
+        self.download_queue_widget.setMinimumWidth(450) # Increased to accommodate X buttons
+        self.download_queue_widget.setMaximumWidth(600) # Increased to give more space
 
-        # Vertical Separator Line
-        separator_line = QFrame()
-        separator_line.setFrameShape(QFrame.Shape.VLine)
-        separator_line.setFrameShadow(QFrame.Shadow.Sunken)
-        separator_line.setObjectName("VerticalSeparatorLine") # For styling
-        content_and_queue_layout.addWidget(separator_line)
-
-        content_and_queue_layout.addWidget(self.download_queue_widget)
+        # Create horizontal splitter for content and queue (full height)
+        from PyQt6.QtWidgets import QSplitter
+        content_and_queue_splitter = QSplitter(Qt.Orientation.Horizontal)
         
-        self.main_layout.addLayout(content_and_queue_layout, 1) # This layout now holds content and queue
+        # Add content stack to splitter
+        content_and_queue_splitter.addWidget(self.content_stack)
+        
+        # Set size policy for download queue widget to expand vertically
+        self.download_queue_widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        content_and_queue_splitter.addWidget(self.download_queue_widget)
+        
+        # Set splitter proportions (content takes most space, queue takes fixed width)
+        content_and_queue_splitter.setSizes([800, 500])  # Approximate proportions
+        content_and_queue_splitter.setStretchFactor(0, 1)  # Content stretches
+        content_and_queue_splitter.setStretchFactor(1, 0)  # Queue doesn't stretch
+        
+        self.main_layout.addWidget(content_and_queue_splitter, 1) # This splitter now holds content and queue
 
         # REMOVED Player Bar setup call
         # self.setup_player_bar()
@@ -600,6 +811,10 @@ class MainWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_update.connect(self.status_bar.showMessage)
+        
+        # Legacy download monitor widget removed with legacy system
+        # Monitor functionality is now integrated into the new download service
+        
         self.status_update.emit("Welcome to DeeMusic!")
 
         logger.info("UI setup complete.")
@@ -607,20 +822,21 @@ class MainWindow(QMainWindow):
 
     def _handle_track_download_request(self, track_data: dict):
         """Handles a request to download a single track."""
-        if not self.download_manager:
-            logger.error("DownloadManager not available for track download.")
-            return
-
-        track_id = track_data.get('id')
-        track_title = track_data.get('title', 'Unknown Track')
-
-        if not track_id:
-            logger.error(f"Cannot download track '{track_title}': Missing ID.")
-            return
-            
-        logger.info(f"MainWindow initiating download for track: {track_title} (ID: {track_id})")
-        self.download_manager.download_track(track_id) # No asyncio.create_task as download_track is sync
-        # self.statusBar().showMessage(f"Downloading {track_title}...", 3000)
+        # Try new system first, fallback to legacy
+        if hasattr(self, 'download_service') and self.download_service:
+            logger.info("Using new DownloadService for track download")
+            try:
+                track_id = track_data.get('id')
+                if track_id:
+                    self.download_service.download_track(track_id)
+                    return
+            except Exception as e:
+                logger.error(f"New DownloadService failed for track download: {e}")
+                logger.info("Falling back to legacy system...")
+        
+        # Legacy system removed - only new service available
+        logger.error("Track download fallback to legacy system not available - legacy system removed.")
+        return
 
     def _handle_album_download_request(self, album_data: dict, track_ids: list[int] | None = None):
         """
@@ -629,25 +845,21 @@ class MainWindow(QMainWindow):
         If track_ids is a non-empty list, it downloads specified tracks from the album.
         If track_ids is None, it also downloads the full album.
         """
-        if not self.download_manager:
-            logger.error("DownloadManager not available for album download.")
-            return
-
-        album_id = album_data.get('id')
-        album_title = album_data.get('title', 'Unknown Album')
-
-        if not album_id:
-            logger.error(f"Cannot download album '{album_title}': Missing ID.")
-            return
-
-        if track_ids == [] or track_ids is None: # Full album download
-            logger.info(f"MainWindow initiating download for full album: {album_title} (ID: {album_id})")
-            asyncio.create_task(self.download_manager.download_album(album_id=album_id, track_ids=[]))
-        elif track_ids: # Non-empty list of specific track IDs
-            logger.info(f"MainWindow initiating download for {len(track_ids)} specific tracks from album: {album_title} (ID: {album_id}).")
-            asyncio.create_task(self.download_manager.download_album(album_id=album_id, track_ids=track_ids))
-        else:
-            logger.warning(f"Album download request for {album_title} (ID: {album_id}) has unexpected track_ids: {track_ids}. No action taken.")
+        # Try new system first, fallback to legacy
+        if hasattr(self, 'download_service') and self.download_service:
+            logger.info("Using new DownloadService for album download")
+            try:
+                album_id = album_data.get('id')
+                if album_id:
+                    self.download_service.download_album(album_id)
+                    return
+            except Exception as e:
+                logger.error(f"New DownloadService failed for album download: {e}")
+                logger.info("Falling back to legacy system...")
+        
+        # Legacy system removed - only new service available
+        logger.error("Album download fallback to legacy system not available - legacy system removed.")
+        return
 
     def _handle_playlist_download_request(self, playlist_data: dict, track_ids: list[int] | None = None):
         """
@@ -656,32 +868,50 @@ class MainWindow(QMainWindow):
         If track_ids is a non-empty list, it downloads specified tracks from the playlist.
         If track_ids is None, it also downloads the full playlist.
         """
-        if not self.download_manager:
-            logger.error("DownloadManager not available for playlist download.")
+        if not playlist_data:
+            logger.error("[MainWindow] No playlist data provided for download")
             return
-
-        playlist_id = playlist_data.get('id')
+            
         playlist_title = playlist_data.get('title', 'Unknown Playlist')
+        playlist_id = playlist_data.get('id')
         
-        # Debug: Log what we're receiving
-        logger.debug(f"[MainWindow] _handle_playlist_download_request called with playlist_data: {playlist_data}")
-        logger.debug(f"[MainWindow] track_ids parameter: {track_ids}")
-
-        if not playlist_id:
-            logger.error(f"Cannot download playlist '{playlist_title}': Missing ID.")
-            return
-
-        if track_ids == [] or track_ids is None: # Full playlist download
-            logger.info(f"MainWindow initiating download for full playlist: {playlist_title} (ID: {playlist_id})")
-            logger.debug(f"[MainWindow] Calling download_manager.download_playlist with playlist_id={playlist_id}, playlist_title='{playlist_title}', track_ids=[]")
-            asyncio.create_task(self.download_manager.download_playlist(playlist_id=playlist_id, playlist_title=playlist_title, track_ids=[])) # MODIFIED: Added asyncio.create_task
-            # self.statusBar().showMessage(f"Downloading full playlist {playlist_title}...", 3000)
-        elif track_ids: # Non-empty list of specific track IDs
-            logger.info(f"MainWindow initiating download for {len(track_ids)} specific tracks from playlist: {playlist_title} (ID: {playlist_id}).")
-            asyncio.create_task(self.download_manager.download_playlist(playlist_id=playlist_id, playlist_title=playlist_title, track_ids=track_ids)) # MODIFIED: Added asyncio.create_task
-            # self.statusBar().showMessage(f"Downloading {len(track_ids)} tracks from {playlist_title}...", 3000)
+        logger.info(f"[MainWindow] Received download request for playlist '{playlist_title}' (ID: {playlist_id}).")
+        
+        # Use new DownloadService for playlist downloads
+        if hasattr(self, 'download_service') and self.download_service:
+            logger.info("Using new DownloadService for playlist download")
+            # Use async method for playlist downloads to properly fetch tracks
+            import asyncio
+            asyncio.create_task(self._async_add_playlist_to_queue(playlist_data))
         else:
-            logger.warning(f"Playlist download request for {playlist_title} (ID: {playlist_id}) has unexpected track_ids: {track_ids}. No action taken.")
+            logger.error("[MainWindow] DownloadService not available for playlist download")
+            return
+    
+    async def _async_add_playlist_to_queue(self, playlist_data: dict):
+        """Async helper to add playlist to queue with proper track fetching."""
+        try:
+            playlist_id = playlist_data.get('id')
+            playlist_title = playlist_data.get('title', 'Unknown Playlist')
+            
+            if playlist_id and self.deezer_api:
+                logger.info(f"[MainWindow] Fetching tracks for playlist {playlist_id}")
+                # Fetch full playlist data with tracks
+                full_tracks = await self.deezer_api.get_playlist_tracks(playlist_id)
+                
+                if full_tracks:
+                    # Update playlist data with tracks
+                    playlist_data['tracks'] = {'data': full_tracks}
+                    logger.info(f"[MainWindow] Fetched {len(full_tracks)} tracks for playlist '{playlist_title}'")
+                else:
+                    logger.warning(f"[MainWindow] Could not fetch tracks for playlist {playlist_id}")
+                    return
+            
+            # Now add to download service with full track data
+            self.download_service.add_playlist(playlist_data)
+            logger.info(f"[MainWindow] Successfully added playlist '{playlist_title}' to download queue")
+            
+        except Exception as e:
+            logger.error(f"[MainWindow] Error adding playlist to download queue: {e}")
 
     # Dummy methods for player controls (as player bar is removed)
     def update_playback_slider(self, position: int): pass
@@ -776,8 +1006,7 @@ class MainWindow(QMainWindow):
         # Make sure the page has the updated services
         if not self.artist_detail_page.deezer_api and self.deezer_api:
             self.artist_detail_page.deezer_api = self.deezer_api
-        if not self.artist_detail_page.download_manager and self.download_manager:
-            self.artist_detail_page.download_manager = self.download_manager
+        # Legacy download_manager reference removed - using new download service
 
         # Signals are already connected in connect_signals() method - no need to connect here
 
@@ -824,8 +1053,9 @@ class MainWindow(QMainWindow):
 
         logger.info(f"[MainWindow] Received download request from HomePage for {item_type} '{item_title}' (ID: {item_id}).")
 
-        if not self.download_manager:
-            logger.error("[MainWindow] DownloadManager not available. Cannot process download from HomePage.")
+        # Check for new download service
+        if not (hasattr(self, 'download_service') and self.download_service):
+            logger.error("[MainWindow] DownloadService not available. Cannot process download from HomePage.")
             # self.statusBar().showMessage("Download service not ready. Please try again later.", 5000)
             return
 
@@ -1004,20 +1234,76 @@ class MainWindow(QMainWindow):
             logger.debug(f"Back button visibility set to: {visible} (History: {bool(self.view_history)}, SearchActive: {is_search_active})")
         else:
             logger.debug("_update_back_button_visibility: Search widget not available.")
+    
+    def load_queue_state_deferred(self):
+        """Load the download queue state after the main UI is ready."""
+        def _do_load():
+            try:
+                if hasattr(self, 'download_queue_widget') and self.download_queue_widget:
+                    logger.info("[Deferred Loading] Loading download queue state...")
+                    self.download_queue_widget.load_queue_state()
+                    logger.info("[Deferred Loading] Download queue state loaded successfully.")
+                    
+                    # Start deferred queue processing after UI is ready
+                    # Legacy deferred queue processing removed - new system handles this automatically
+                else:
+                    logger.warning("[Deferred Loading] DownloadQueueWidget not available for queue loading.")
+            except Exception as e:
+                logger.error(f"[Deferred Loading] Failed to load download queue state: {e}")
+        
+        # Add a small delay to ensure UI is fully rendered
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(500, _do_load)  # 500ms delay
         
     def closeEvent(self, event):
         """Handle the main window close event."""
         logger.info("MainWindow close event triggered.")
         
+        # Stop periodic token refresh timer
+        if hasattr(self, 'token_refresh_timer'):
+            self.token_refresh_timer.stop()
+            logger.info("Stopped periodic token refresh timer")
+        
         # Save download queue state before shutdown
         # Removed: self.download_queue_widget.save_queue_state()
+        # Cleanup monitor widget
+        if hasattr(self, 'monitor_widget'):
+            self.monitor_widget.cleanup()
+        
         # Perform cleanup tasks
-        if self.download_manager:
-            logger.info("Shutting down DownloadManager...")
-            self.download_manager.shutdown() # Gracefully stop all downloads
-            logger.info("DownloadManager shutdown complete.")
-        else:
-            logger.warning("DownloadManager not initialized, skipping shutdown.")
+        # Cleanup new download service
+        if hasattr(self, 'download_service') and self.download_service:
+            logger.info("Shutting down new DownloadService...")
+            try:
+                self.download_service.stop()
+                logger.info("DownloadService shutdown complete.")
+            except Exception as e:
+                logger.error(f"Error during download service shutdown: {e}")
+        
+        # Force application exit immediately to prevent hanging
+        from PyQt6.QtCore import QTimer
+        from PyQt6.QtWidgets import QApplication
+        import sys
+        import os
+        
+        def force_exit():
+            logger.info("Forcing immediate application exit")
+            try:
+                QApplication.instance().quit()
+            except:
+                pass
+            # Ultimate fallback - force system exit immediately
+            os._exit(0)  # More aggressive than sys.exit()
+        
+        # Exit immediately - no delay
+        force_exit()
+        
+        # Legacy download manager shutdown removed - new system handles this
+        
+        # Cleanup new queue widget
+        if hasattr(self, 'download_queue_widget') and isinstance(self.download_queue_widget, NewQueueWidget):
+            logger.info("Cleaning up new queue widget...")
+            self.download_queue_widget.cleanup()
 
         # Save any settings or state if necessary
         # Example: self.config.save_settings()
@@ -1030,6 +1316,30 @@ class MainWindow(QMainWindow):
 
         logger.info("Proceeding with application exit.")
         super().closeEvent(event) # Proceed with closing
+    
+    def _setup_periodic_token_refresh(self):
+        """Set up periodic token refresh to prevent CSRF errors."""
+        if not hasattr(self, 'deezer_api') or not self.deezer_api:
+            return
+            
+        # Create a timer to refresh tokens every 90 seconds
+        self.token_refresh_timer = QTimer()
+        self.token_refresh_timer.timeout.connect(self._periodic_token_refresh)
+        self.token_refresh_timer.start(90000)  # 90 seconds
+        logger.info("[Token Refresh] Set up periodic token refresh every 90 seconds")
+    
+    def _periodic_token_refresh(self):
+        """Perform periodic token refresh to prevent CSRF errors."""
+        try:
+            if hasattr(self, 'deezer_api') and self.deezer_api:
+                logger.info("[Token Refresh] Performing periodic token refresh...")
+                success = self.deezer_api.force_token_refresh_test()
+                if success:
+                    logger.info("[Token Refresh] Periodic token refresh successful")
+                else:
+                    logger.warning("[Token Refresh] Periodic token refresh failed")
+        except Exception as e:
+            logger.error(f"[Token Refresh] Error during periodic refresh: {e}")
         
     async def _download_artist_content(self, artist_id, artist_name):
         """Download all albums, singles, and EPs for an artist."""
@@ -1053,8 +1363,8 @@ class MainWindow(QMainWindow):
                 
                 if album_id:
                     logger.info(f"[MainWindow] Downloading {album_type}: '{album_title}' (ID: {album_id}) by {artist_name}")
-                    # Use the existing download_album method which will fetch tracks automatically
-                    asyncio.create_task(self.download_manager.download_album(album_id=album_id, track_ids=[]))
+                    # Legacy download_manager removed - would need to use new download service
+                    logger.error("Artist download functionality requires new download service integration")
                 else:
                     logger.warning(f"[MainWindow] Skipping album '{album_title}' - missing ID")
             

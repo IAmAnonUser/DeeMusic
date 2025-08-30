@@ -9,12 +9,24 @@ if src_dir not in sys.path:
 print(f"RUN.PY: Modified sys.path: {sys.path}")
 # --- End sys.path modification ---
 
+# Apply startup optimizations as early as possible (disabled for now)
+# try:
+#     from src.utils.startup_optimizer import optimize_startup
+#     optimize_startup()
+#     print("RUN.PY: Startup optimizations applied")
+# except ImportError as e:
+#     print(f"RUN.PY: Performance optimization modules not available: {e}")
+# except Exception as e:
+#     print(f"RUN.PY: Warning - Could not apply startup optimizations: {e}")
+print("RUN.PY: Startup optimizations disabled for compatibility")
+
 import asyncio
 from pathlib import Path
 from PyQt6.QtWidgets import QApplication
 # Import qasync
 import qasync
 import logging
+from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import QCoreApplication, QTimer
 from typing import Dict
 
@@ -31,14 +43,42 @@ print(f"RUN.PY: MainWindow class is defined in module: {module_path}")
 
 from src.config_manager import ConfigManager
 from src.services.deezer_api import DeezerAPI
-from src.services.download_manager import DownloadManager, is_valid_arl
+# Legacy download manager moved to backup
+# from src.services.download_manager import DownloadManager, is_valid_arl
+
+# Simple ARL validation function (moved from legacy download_manager)
+def is_valid_arl(arl: str) -> bool:
+    """Basic check if ARL looks potentially valid."""
+    return arl is not None and len(arl) > 100
 from src.ui.settings_dialog import SettingsDialog
 # Import image cache utilities
 from src.utils.image_cache import clean_cache
 
 # Set up basic logging for run.py
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 logger = logging.getLogger("run")
+
+# Initialize rotating file logging early so all modules write to file
+def _setup_file_logging():
+    try:
+        appdata_dir = os.environ.get('APPDATA') or os.path.expanduser('~')
+        log_dir = os.path.join(appdata_dir, 'DeeMusic', 'logs')
+        os.makedirs(log_dir, exist_ok=True)
+        log_file = os.path.join(log_dir, 'deemusic_debug.log')
+        file_handler = RotatingFileHandler(log_file, maxBytes=5_000_000, backupCount=3, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(name)s - %(message)s'))
+        root_logger = logging.getLogger()
+        # Avoid duplicate handlers for the same file
+        if not any(isinstance(h, RotatingFileHandler) and getattr(h, 'baseFilename', '') == os.path.abspath(log_file) for h in root_logger.handlers):
+            root_logger.addHandler(file_handler)
+            # Set to INFO level to reduce startup noise while keeping important logs
+            root_logger.setLevel(logging.INFO)
+        print(f"RUN.PY: File logging to {log_file}")
+    except Exception as e:
+        print(f"RUN.PY: Failed to initialize file logging: {e}")
+
+_setup_file_logging()
 
 # Remove the async run_app function, setup will be synchronous
 # async def run_app(): ...
@@ -102,7 +142,26 @@ def test_single_download(track_id_to_test: int, app_instance):
     logger.info(f"--- Direct Download Test for Track ID: {track_id_to_test} Queued ---")
 
 
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Global exception handler to catch unhandled exceptions."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        # Allow KeyboardInterrupt to work normally
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    
+    # Log the exception
+    logger = logging.getLogger(__name__)
+    logger.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+    
+    # Also print to stderr for immediate visibility
+    print(f"CRITICAL ERROR: {exc_type.__name__}: {exc_value}", file=sys.stderr)
+    import traceback
+    traceback.print_exception(exc_type, exc_value, exc_traceback, file=sys.stderr)
+
 def main():
+    # Set up global exception handler
+    sys.excepthook = handle_exception
+    
     # PERFORMANCE OPTIMIZATION: Apply startup optimizations for standalone executable
     perf_monitor = None
     try:
@@ -121,8 +180,29 @@ def main():
     # Option 2: Or use basicConfig if AppLogging is not for backend/general logging
     # Ensure this is called only once
     if not logging.getLogger().hasHandlers():
-        logging.basicConfig(stream=sys.stdout, level=logging.DEBUG,
+        logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # Set specific loggers to WARNING/ERROR to reduce startup verbosity
+    logging.getLogger('src.services.deezer_api').setLevel(logging.WARNING)
+    logging.getLogger('src.services.new_download_worker').setLevel(logging.INFO)
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+    logging.getLogger('services.event_bus').setLevel(logging.WARNING)
+    logging.getLogger('services.new_download_worker').setLevel(logging.INFO)
+    
+    # Suppress noisy UI and framework loggers to minimize startup noise
+    logging.getLogger('utils.image_cache').setLevel(logging.ERROR)
+    logging.getLogger('src.utils.image_cache').setLevel(logging.ERROR)
+    logging.getLogger('src.ui.search_widget').setLevel(logging.ERROR)
+    logging.getLogger('qasync').setLevel(logging.ERROR)
+    logging.getLogger('src.ui.components.responsive_grid').setLevel(logging.ERROR)
+    logging.getLogger('src.utils.icon_utils').setLevel(logging.ERROR)
+    logging.getLogger('PyQt6').setLevel(logging.ERROR)
+    logging.getLogger('asyncio').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    
+    # Suppress library scanner excessive logging
+    logging.getLogger('src.ui.library_scanner_widget_minimal').setLevel(logging.WARNING)
 
     logger.info("--- APPLICATION STARTING ---")
     
@@ -141,6 +221,16 @@ def main():
         logger.error(f"Error starting image cache cleanup: {e}")
 
     app = QApplication(sys.argv)
+    
+    # Set up Qt exception handling
+    def qt_exception_hook(exc_type, exc_value, exc_traceback):
+        """Handle exceptions in Qt slots and callbacks."""
+        logger = logging.getLogger(__name__)
+        logger.critical("Qt exception", exc_info=(exc_type, exc_value, exc_traceback))
+        print(f"QT ERROR: {exc_type.__name__}: {exc_value}", file=sys.stderr)
+    
+    # Install Qt exception hook
+    sys.excepthook = qt_exception_hook
     
     # PERFORMANCE OPTIMIZATION: Apply UI-specific optimizations
     try:
@@ -206,6 +296,19 @@ def main():
         perf_monitor.checkpoint("Application ready - entering main loop")
         perf_monitor.summary()
 
+    # Set up asyncio exception handler
+    def asyncio_exception_handler(loop, context):
+        """Handle asyncio exceptions."""
+        logger = logging.getLogger(__name__)
+        exception = context.get('exception')
+        if exception:
+            logger.critical(f"Asyncio exception: {exception}", exc_info=exception)
+        else:
+            logger.critical(f"Asyncio error: {context}")
+        print(f"ASYNCIO ERROR: {context}", file=sys.stderr)
+    
+    event_loop.set_exception_handler(asyncio_exception_handler)
+    
     # app.exec() will run the qasync event loop
     with event_loop:
         return_code = event_loop.run_forever()
